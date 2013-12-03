@@ -1,9 +1,0 @@
-add_polly_library(LLVMPollyAnalysis
-  Dependences.cpp
-  MayAliasSet.cpp
-  ScopDetection.cpp
-  ScopInfo.cpp
-  ScopGraphPrinter.cpp
-  ScopPass.cpp
-  TempScopInfo.cpp
-)
