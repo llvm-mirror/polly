@@ -7,7 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// Functions for converting between gmp objects and apint.
+// Functions for converting between gmp objects and llvm::APInt.
 //
 //===----------------------------------------------------------------------===//
 #include "polly/Support/GICHelper.h"
@@ -182,6 +182,7 @@ static void makeIslCompatible(std::string &str) {
   replace(str, "\"", "_");
   replace(str, " ", "__");
   replace(str, "=>", "TO");
+  replace(str, "+", "_");
 }
 
 std::string polly::getIslCompatibleName(const std::string &Prefix,
@@ -193,116 +194,89 @@ std::string polly::getIslCompatibleName(const std::string &Prefix,
 }
 
 std::string polly::getIslCompatibleName(const std::string &Prefix,
-                                        const Value *Val,
-                                        const std::string &Suffix) {
+                                        const std::string &Name, long Number,
+                                        const std::string &Suffix,
+                                        bool UseInstructionNames) {
+  std::string S = Prefix;
+
+  if (UseInstructionNames)
+    S += std::string("_") + Name;
+  else
+    S += std::to_string(Number);
+
+  S += Suffix;
+
+  makeIslCompatible(S);
+  return S;
+}
+
+std::string polly::getIslCompatibleName(const std::string &Prefix,
+                                        const Value *Val, long Number,
+                                        const std::string &Suffix,
+                                        bool UseInstructionNames) {
   std::string ValStr;
-  raw_string_ostream OS(ValStr);
-  Val->printAsOperand(OS, false);
-  ValStr = OS.str();
-  // Remove the leading %
-  ValStr.erase(0, 1);
+
+  if (UseInstructionNames && Val->hasName())
+    ValStr = std::string("_") + std::string(Val->getName());
+  else
+    ValStr = std::to_string(Number);
+
   return getIslCompatibleName(Prefix, ValStr, Suffix);
 }
 
-void polly::foreachElt(const isl::map &Map,
-                       const std::function<void(isl::basic_map)> &F) {
-  isl_map_foreach_basic_map(
-      Map.keep(),
-      [](__isl_take isl_basic_map *BMap, void *User) -> isl_stat {
-        auto &F =
-            *static_cast<const std::function<void(isl::basic_map)> *>(User);
-        F(give(BMap));
-        return isl_stat_ok;
-      },
-      const_cast<void *>(static_cast<const void *>(&F)));
+#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
+/// To call a inline dump() method in a debugger, at it must have been
+/// instantiated in at least one translation unit. Because isl's dump() method
+/// are meant to be called from a debugger only, but not from code, no such
+/// instantiation would exist. We use this method to force an instantiation in
+/// this translation unit. Because it has non-static linking, the compiler does
+/// not know that it is never called, and therefore must ensure the existence of
+/// the dump functions.
+void neverCalled() {
+  isl::aff().dump();
+  isl::aff_list().dump();
+  isl::ast_expr().dump();
+  isl::ast_expr_list().dump();
+  isl::ast_node().dump();
+  isl::ast_node_list().dump();
+  isl::band_list().dump();
+  isl::basic_map().dump();
+  isl::basic_map_list().dump();
+  isl::basic_set().dump();
+  isl::basic_set_list().dump();
+  isl::constraint().dump();
+  isl::constraint_list().dump();
+  isl::id().dump();
+  isl::id_list().dump();
+  isl::id_to_ast_expr().dump();
+  isl::local_space().dump();
+  isl::map().dump();
+  isl::map_list().dump();
+  isl::multi_aff().dump();
+  isl::multi_pw_aff().dump();
+  isl::multi_union_pw_aff().dump();
+  isl::multi_val().dump();
+  isl::point().dump();
+  isl::pw_aff().dump();
+  isl::pw_aff_list().dump();
+  isl::pw_multi_aff().dump();
+  isl::pw_qpolynomial().dump();
+  isl::qpolynomial().dump();
+  isl::schedule().dump();
+  isl::schedule_constraints().dump();
+  isl::schedule_node().dump();
+  isl::set().dump();
+  isl::set_list().dump();
+  isl::space().dump();
+  isl::union_map().dump();
+  isl::union_map_list().dump();
+  isl::union_pw_aff().dump();
+  isl::union_pw_aff_list().dump();
+  isl::union_pw_multi_aff().dump();
+  isl::union_pw_multi_aff_list().dump();
+  isl::union_set().dump();
+  isl::union_set_list().dump();
+  isl::val().dump();
+  isl::val_list().dump();
 }
-
-void polly::foreachElt(const isl::set &Set,
-                       const std::function<void(isl::basic_set)> &F) {
-  isl_set_foreach_basic_set(
-      Set.keep(),
-      [](__isl_take isl_basic_set *BSet, void *User) -> isl_stat {
-        auto &F =
-            *static_cast<const std::function<void(isl::basic_set)> *>(User);
-        F(give(BSet));
-        return isl_stat_ok;
-      },
-      const_cast<void *>(static_cast<const void *>(&F)));
-}
-
-void polly::foreachElt(const isl::union_map &UMap,
-                       const std::function<void(isl::map Map)> &F) {
-  isl_union_map_foreach_map(
-      UMap.keep(),
-      [](__isl_take isl_map *Map, void *User) -> isl_stat {
-        auto &F = *static_cast<const std::function<void(isl::map)> *>(User);
-        F(give(Map));
-        return isl_stat_ok;
-      },
-      const_cast<void *>(static_cast<const void *>(&F)));
-}
-
-void polly::foreachElt(const isl::union_set &USet,
-                       const std::function<void(isl::set Set)> &F) {
-  isl_union_set_foreach_set(
-      USet.keep(),
-      [](__isl_take isl_set *Set, void *User) -> isl_stat {
-        auto &F = *static_cast<const std::function<void(isl::set)> *>(User);
-        F(give(Set));
-        return isl_stat_ok;
-      },
-      const_cast<void *>(static_cast<const void *>(&F)));
-}
-
-void polly::foreachElt(const isl::union_pw_aff &UPwAff,
-                       const std::function<void(isl::pw_aff)> &F) {
-  isl_union_pw_aff_foreach_pw_aff(
-      UPwAff.keep(),
-      [](__isl_take isl_pw_aff *PwAff, void *User) -> isl_stat {
-        auto &F = *static_cast<const std::function<void(isl::pw_aff)> *>(User);
-        F(give(PwAff));
-        return isl_stat_ok;
-      },
-      const_cast<void *>(static_cast<const void *>(&F)));
-}
-
-isl_stat
-polly::foreachEltWithBreak(const isl::map &Map,
-                           const std::function<isl_stat(isl::basic_map)> &F) {
-  return isl_map_foreach_basic_map(
-      Map.keep(),
-      [](__isl_take isl_basic_map *BMap, void *User) -> isl_stat {
-        auto &F =
-            *static_cast<const std::function<isl_stat(isl::basic_map)> *>(User);
-        return F(give(BMap));
-      },
-      const_cast<void *>(static_cast<const void *>(&F)));
-}
-
-isl_stat
-polly::foreachEltWithBreak(const isl::union_map &UMap,
-                           const std::function<isl_stat(isl::map Map)> &F) {
-  return isl_union_map_foreach_map(
-      UMap.keep(),
-      [](__isl_take isl_map *Map, void *User) -> isl_stat {
-        auto &F =
-            *static_cast<const std::function<isl_stat(isl::map Map)> *>(User);
-        return F(give(Map));
-      },
-      const_cast<void *>(static_cast<const void *>(&F)));
-}
-
-isl_stat polly::foreachPieceWithBreak(
-    const isl::pw_aff &PwAff,
-    const std::function<isl_stat(isl::set, isl::aff)> &F) {
-  return isl_pw_aff_foreach_piece(
-      PwAff.keep(),
-      [](__isl_take isl_set *Domain, __isl_take isl_aff *Aff,
-         void *User) -> isl_stat {
-        auto &F =
-            *static_cast<const std::function<isl_stat(isl::set, isl::aff)> *>(
-                User);
-        return F(give(Domain), give(Aff));
-      },
-      const_cast<void *>(static_cast<const void *>(&F)));
-}
+#endif

@@ -35,15 +35,15 @@ __isl_give isl_vertices *isl_vertices_copy(__isl_keep isl_vertices *vertices)
 	return vertices;
 }
 
-void isl_vertices_free(__isl_take isl_vertices *vertices)
+__isl_null isl_vertices *isl_vertices_free(__isl_take isl_vertices *vertices)
 {
 	int i;
 
 	if (!vertices)
-		return;
+		return NULL;
 
 	if (--vertices->ref > 0)
-		return;
+		return NULL;
 
 	for (i = 0; i < vertices->n_vertices; ++i) {
 		isl_basic_set_free(vertices->v[i].vertex);
@@ -59,6 +59,8 @@ void isl_vertices_free(__isl_take isl_vertices *vertices)
 
 	isl_basic_set_free(vertices->bset);
 	free(vertices);
+
+	return NULL;
 }
 
 struct isl_vertex_list {
@@ -66,7 +68,7 @@ struct isl_vertex_list {
 	struct isl_vertex_list *next;
 };
 
-static void free_vertex_list(struct isl_vertex_list *list)
+static struct isl_vertex_list *free_vertex_list(struct isl_vertex_list *list)
 {
 	struct isl_vertex_list *next;
 
@@ -76,6 +78,8 @@ static void free_vertex_list(struct isl_vertex_list *list)
 		isl_basic_set_free(list->v.dom);
 		free(list);
 	}
+
+	return NULL;
 }
 
 static __isl_give isl_vertices *vertices_from_list(__isl_keep isl_basic_set *bset,
@@ -997,23 +1001,6 @@ isl_ctx *isl_vertex_get_ctx(__isl_keep isl_vertex *vertex)
 int isl_vertex_get_id(__isl_keep isl_vertex *vertex)
 {
 	return vertex ? vertex->id : -1;
-}
-
-__isl_give isl_basic_set *isl_basic_set_set_integral(__isl_take isl_basic_set *bset)
-{
-	if (!bset)
-		return NULL;
-
-	if (!ISL_F_ISSET(bset, ISL_BASIC_MAP_RATIONAL))
-		return bset;
-
-	bset = isl_basic_set_cow(bset);
-	if (!bset)
-		return NULL;
-
-	ISL_F_CLR(bset, ISL_BASIC_MAP_RATIONAL);
-
-	return isl_basic_set_finalize(bset);
 }
 
 /* Return the activity domain of the vertex "vertex".

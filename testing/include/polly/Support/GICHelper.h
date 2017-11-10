@@ -19,14 +19,12 @@
 #include "llvm/Support/raw_ostream.h"
 #include "isl/aff.h"
 #include "isl/ctx.h"
+#include "isl/isl-noexceptions.h"
 #include "isl/map.h"
 #include "isl/options.h"
 #include "isl/set.h"
 #include "isl/union_map.h"
 #include "isl/union_set.h"
-
-#include "isl-noexceptions.h"
-
 #include <functional>
 #include <string>
 
@@ -114,7 +112,7 @@ inline isl::val valFromAPInt(isl_ctx *Ctx, const llvm::APInt Int,
 /// As the input isl_val may be negative, the APInt that this function returns
 /// must always be interpreted as signed two's complement value. The bitwidth of
 /// the generated APInt is always the minimal bitwidth necessary to model the
-/// provided integer when interpreting the bitpattern as signed value.
+/// provided integer when interpreting the bit pattern as signed value.
 ///
 /// Some example conversions are:
 ///
@@ -143,7 +141,7 @@ llvm::APInt APIntFromVal(__isl_take isl_val *Val);
 /// As the input isl::val may be negative, the APInt that this function returns
 /// must always be interpreted as signed two's complement value. The bitwidth of
 /// the generated APInt is always the minimal bitwidth necessary to model the
-/// provided integer when interpreting the bitpattern as signed value.
+/// provided integer when interpreting the bit pattern as signed value.
 ///
 /// Some example conversions are:
 ///
@@ -235,10 +233,43 @@ inline llvm::raw_ostream &operator<<(llvm::raw_ostream &OS,
   return OS;
 }
 
-/// Return @p Prefix + @p Val->getName() + @p Suffix but Isl compatible.
+/// Combine Prefix, Val (or Number) and Suffix to an isl-compatible name.
+///
+/// In case @p UseInstructionNames is set, this function returns:
+///
+/// @p Prefix + "_" + @p Val->getName() + @p Suffix
+///
+/// otherwise
+///
+/// @p Prefix + to_string(Number) + @p Suffix
+///
+/// We ignore the value names by default, as they may change between release
+/// and debug mode and can consequently not be used when aiming for reproducible
+/// builds. However, for debugging named statements are often helpful, hence
+/// we allow their optional use.
 std::string getIslCompatibleName(const std::string &Prefix,
-                                 const llvm::Value *Val,
-                                 const std::string &Suffix);
+                                 const llvm::Value *Val, long Number,
+                                 const std::string &Suffix,
+                                 bool UseInstructionNames);
+
+/// Combine Prefix, Name (or Number) and Suffix to an isl-compatible name.
+///
+/// In case @p UseInstructionNames is set, this function returns:
+///
+/// @p Prefix + "_" + Name + @p Suffix
+///
+/// otherwise
+///
+/// @p Prefix + to_string(Number) + @p Suffix
+///
+/// We ignore @p Name by default, as they may change between release
+/// and debug mode and can consequently not be used when aiming for reproducible
+/// builds. However, for debugging named statements are often helpful, hence
+/// we allow their optional use.
+std::string getIslCompatibleName(const std::string &Prefix,
+                                 const std::string &Middle, long Number,
+                                 const std::string &Suffix,
+                                 bool UseInstructionNames);
 
 std::string getIslCompatibleName(const std::string &Prefix,
                                  const std::string &Middle,
@@ -256,87 +287,70 @@ operator<<(llvm::DiagnosticInfoOptimizationBase &OS,
   return OS;
 }
 
-/// Enumerate all isl_basic_maps of an isl_map.
+/// Scope guard for code that allows arbitrary isl function to return an error
+/// if the max-operations quota exceeds.
 ///
-/// This basically wraps isl_map_foreach_basic_map() and allows to call back
-/// C++11 closures.
-void foreachElt(const isl::map &Map,
-                const std::function<void(isl::basic_map)> &F);
+/// This allows to opt-in code sections that have known long executions times.
+/// code not in a hot path can continue to assume that no unexpected error
+/// occurs.
+///
+/// This is typically used inside a nested IslMaxOperationsGuard scope. The
+/// IslMaxOperationsGuard defines the number of allowed base operations for some
+/// code, IslQuotaScope defines where it is allowed to return an error result.
+class IslQuotaScope {
+  isl_ctx *IslCtx;
+  int OldOnError;
 
-/// Enumerate all isl_basic_sets of an isl_set.
-///
-/// This basically wraps isl_set_foreach_basic_set() and allows to call back
-/// C++11 closures.
-void foreachElt(const isl::set &Set,
-                const std::function<void(isl::basic_set)> &F);
+public:
+  IslQuotaScope() : IslCtx(nullptr) {}
+  IslQuotaScope(const IslQuotaScope &) = delete;
+  IslQuotaScope(IslQuotaScope &&Other)
+      : IslCtx(Other.IslCtx), OldOnError(Other.OldOnError) {
+    Other.IslCtx = nullptr;
+  }
+  const IslQuotaScope &operator=(IslQuotaScope &&Other) {
+    std::swap(this->IslCtx, Other.IslCtx);
+    std::swap(this->OldOnError, Other.OldOnError);
+    return *this;
+  }
 
-/// Enumerate all isl_maps of an isl_union_map.
-///
-/// This basically wraps isl_union_map_foreach_map() and allows to call back
-/// C++11 closures.
-void foreachElt(const isl::union_map &UMap,
-                const std::function<void(isl::map Map)> &F);
+  /// Enter a quota-aware scope.
+  ///
+  /// Should not be used directly. Use IslMaxOperationsGuard::enter() instead.
+  explicit IslQuotaScope(isl_ctx *IslCtx, unsigned long LocalMaxOps)
+      : IslCtx(IslCtx) {
+    assert(IslCtx);
+    assert(isl_ctx_get_max_operations(IslCtx) == 0 && "Incorrect nesting");
+    if (LocalMaxOps == 0) {
+      this->IslCtx = nullptr;
+      return;
+    }
 
-/// Enumerate all isl_sets of an isl_union_set.
-///
-/// This basically wraps isl_union_set_foreach_set() and allows to call back
-/// C++11 closures.
-void foreachElt(const isl::union_set &USet,
-                const std::function<void(isl::set Set)> &F);
+    OldOnError = isl_options_get_on_error(IslCtx);
+    isl_options_set_on_error(IslCtx, ISL_ON_ERROR_CONTINUE);
+    isl_ctx_reset_error(IslCtx);
+    isl_ctx_set_max_operations(IslCtx, LocalMaxOps);
+  }
 
-/// Enumerate all isl_pw_aff of an isl_union_pw_aff.
-///
-/// This basically wraps isl_union_pw_aff(), but also allows to call back C++11
-/// closures.
-void foreachElt(const isl::union_pw_aff &UPwAff,
-                const std::function<void(isl::pw_aff)> &F);
+  ~IslQuotaScope() {
+    if (!IslCtx)
+      return;
 
-/// Enumerate all polyhedra of an isl_map.
-///
-/// This is a wrapper for isl_map_foreach_basic_map() that allows to call back
-/// C++ closures. The callback has the possibility to interrupt (break) the
-/// enumeration by returning isl_stat_error. A return value of isl_stat_ok will
-/// continue enumerations, if any more elements are left.
-///
-/// @param UMap Collection to enumerate.
-/// @param F    The callback function, lambda or closure.
-///
-/// @return The isl_stat returned by the last callback invocation; isl_stat_ok
-///         if the collection was empty.
-isl_stat foreachEltWithBreak(const isl::map &Map,
-                             const std::function<isl_stat(isl::basic_map)> &F);
+    assert(isl_ctx_get_max_operations(IslCtx) > 0 && "Incorrect nesting");
+    assert(isl_options_get_on_error(IslCtx) == ISL_ON_ERROR_CONTINUE &&
+           "Incorrect nesting");
+    isl_ctx_set_max_operations(IslCtx, 0);
+    isl_options_set_on_error(IslCtx, OldOnError);
+  }
 
-/// Enumerate all isl_maps of an isl_union_map.
-///
-/// This is a wrapper for isl_union_map_foreach_map() that allows to call back
-/// C++ closures. In contrast to the variant without "_with_break", the callback
-/// has the possibility to interrupt (break) the enumeration by returning
-/// isl_stat_error. A return value of isl_stat_ok will continue enumerations, if
-/// any more elements are left.
-///
-/// @param UMap Collection to enumerate.
-/// @param F    The callback function, lambda or closure.
-///
-/// @return The isl_stat returned by the last callback invocation; isl_stat_ok
-///         if the collection was initially empty.
-isl_stat foreachEltWithBreak(const isl::union_map &UMap,
-                             const std::function<isl_stat(isl::map Map)> &F);
+  /// Return whether the current quota has exceeded.
+  bool hasQuotaExceeded() const {
+    if (!IslCtx)
+      return false;
 
-/// Enumerate all pieces of an isl_pw_aff.
-///
-/// This is a wrapper around isl_pw_aff_foreach_piece() that allows to call back
-/// C++11 closures. The callback has the possibility to interrupt (break) the
-/// enumeration by returning isl_stat_error. A return value of isl_stat_ok will
-/// continue enumerations, if any more elements are left.
-///
-/// @param UMap Collection to enumerate.
-/// @param F    The callback function, lambda or closure.
-///
-/// @return The isl_stat returned by the last callback invocation; isl_stat_ok
-///         if the collection was initially empty.
-isl_stat
-foreachPieceWithBreak(const isl::pw_aff &PwAff,
-                      const std::function<isl_stat(isl::set, isl::aff)> &F);
+    return isl_ctx_last_error(IslCtx) == isl_error_quota;
+  }
+};
 
 /// Scoped limit of ISL operations.
 ///
@@ -358,8 +372,11 @@ private:
   /// scope.
   isl_ctx *IslCtx;
 
-  /// Old OnError setting; to reset to when the scope ends.
-  int OldOnError;
+  /// Maximum number of operations for the scope.
+  unsigned long LocalMaxOps;
+
+  /// When AutoEnter is enabled, holds the IslQuotaScope object.
+  IslQuotaScope TopLevelScope;
 
 public:
   /// Enter a max operations scope.
@@ -367,8 +384,14 @@ public:
   /// @param IslCtx      The ISL context to set the operations limit for.
   /// @param LocalMaxOps Maximum number of operations allowed in the
   ///                    scope. If set to zero, no operations limit is enforced.
-  IslMaxOperationsGuard(isl_ctx *IslCtx, unsigned long LocalMaxOps)
-      : IslCtx(IslCtx) {
+  /// @param AutoEnter   If true, automatically enters an IslQuotaScope such
+  ///                    that isl operations may return quota errors
+  ///                    immediately. If false, only starts the operations
+  ///                    counter, but isl does not return quota errors before
+  ///                    calling enter().
+  IslMaxOperationsGuard(isl_ctx *IslCtx, unsigned long LocalMaxOps,
+                        bool AutoEnter = true)
+      : IslCtx(IslCtx), LocalMaxOps(LocalMaxOps) {
     assert(IslCtx);
     assert(isl_ctx_get_max_operations(IslCtx) == 0 &&
            "Nested max operations not supported");
@@ -379,26 +402,26 @@ public:
       return;
     }
 
-    // Save previous state.
-    OldOnError = isl_options_get_on_error(IslCtx);
-
-    // Activate the new setting.
-    isl_ctx_set_max_operations(IslCtx, LocalMaxOps);
     isl_ctx_reset_operations(IslCtx);
-    isl_options_set_on_error(IslCtx, ISL_ON_ERROR_CONTINUE);
+    TopLevelScope = enter(AutoEnter);
   }
 
-  /// Leave the max operations scope.
-  ~IslMaxOperationsGuard() {
+  /// Enter a scope that can handle out-of-quota errors.
+  ///
+  /// @param AllowReturnNull Whether the scoped code can handle out-of-quota
+  ///                        errors. If false, returns a dummy scope object that
+  ///                        does nothing.
+  IslQuotaScope enter(bool AllowReturnNull = true) {
+    return AllowReturnNull && IslCtx ? IslQuotaScope(IslCtx, LocalMaxOps)
+                                     : IslQuotaScope();
+  }
+
+  /// Return whether the current quota has exceeded.
+  bool hasQuotaExceeded() const {
     if (!IslCtx)
-      return;
+      return false;
 
-    assert(isl_options_get_on_error(IslCtx) == ISL_ON_ERROR_CONTINUE &&
-           "Unexpected change of the on_error setting");
-
-    // Return to the previous error setting.
-    isl_ctx_set_max_operations(IslCtx, 0);
-    isl_options_set_on_error(IslCtx, OldOnError);
+    return isl_ctx_last_error(IslCtx) == isl_error_quota;
   }
 };
 

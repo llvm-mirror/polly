@@ -59,7 +59,7 @@ static int status_in(isl_int *ineq, struct isl_tab *tab)
 /* Compute the position of the equalities of basic map "bmap_i"
  * with respect to the basic map represented by "tab_j".
  * The resulting array has twice as many entries as the number
- * of equalities corresponding to the two inequalties to which
+ * of equalities corresponding to the two inequalities to which
  * each equality corresponds.
  */
 static int *eq_status_in(__isl_keep isl_basic_map *bmap_i,
@@ -3746,7 +3746,7 @@ static __isl_give isl_map *update_basic_maps(__isl_take isl_map *map,
  * For each basic map, we also compute the hash of the apparent affine hull
  * for use in coalesce.
  */
-struct isl_map *isl_map_coalesce(struct isl_map *map)
+__isl_give isl_map *isl_map_coalesce(__isl_take isl_map *map)
 {
 	int i;
 	unsigned n;

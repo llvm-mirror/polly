@@ -16,7 +16,7 @@ if test "$llvm_config_found" != yes; then
 	AC_MSG_ERROR([llvm-config not found])
 fi
 CLANG_CXXFLAGS=`$llvm_config --cxxflags | \
-	$SED -e 's/-Wcovered-switch-default//'`
+	$SED -e 's/-Wcovered-switch-default//;s/-gsplit-dwarf//'`
 CLANG_LDFLAGS=`$llvm_config --ldflags`
 targets=`$llvm_config --targets-built`
 components="$targets asmparser bitreader support mc"
@@ -130,6 +130,9 @@ AC_EGREP_HEADER([initializeBuiltins],
 	[clang/Basic/Builtins.h], [],
 	[AC_DEFINE([initializeBuiltins], [InitializeBuiltins],
 		[Define to InitializeBuiltins for older versions of clang])])
+AC_EGREP_HEADER([IK_C], [clang/Frontend/FrontendOptions.h], [],
+	 [AC_DEFINE([IK_C], [InputKind::C],
+	    [Define to InputKind::C for newer versions of clang])])
 AC_TRY_COMPILE([
 	#include <clang/Basic/TargetOptions.h>
 	#include <clang/Lex/PreprocessorOptions.h>

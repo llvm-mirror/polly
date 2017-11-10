@@ -27,6 +27,7 @@
 ; CHECK-NEXT:            for (int c3 = 0; c3 <= 31; c3 += 1)
 ; CHECK-NEXT:              Stmt_bb9(32 * c0 + c2, 32 * c1 + c3);
 ; CHECK-NEXT:        }
+; CHECK-NEXT:      // Inter iteration alias-free
 ; CHECK-NEXT:      // 1st level tiling - Tiles
 ; CHECK-NEXT:      for (int c1 = 0; c1 <= 3; c1 += 1) {
 ; CHECK-NEXT:        for (int c3 = 0; c3 <= 1055; c3 += 1)
@@ -41,6 +42,7 @@
 ; CHECK-NEXT:          for (int c3 = 0; c3 <= 131; c3 += 1)
 ; CHECK-NEXT:            for (int c4 = 0; c4 <= 23; c4 += 1)
 ; CHECK-NEXT:              for (int c5 = 0; c5 <= min(255, -256 * c1 + 1022); c5 += 1) {
+; CHECK-NEXT:                // Loop Vectorizer Disabled
 ; CHECK-NEXT:                // Register tiling - Points
 ; CHECK-NEXT:                {
 ; CHECK-NEXT:                  Stmt_Copy_0(96 * c2 + 4 * c4, 8 * c3, 256 * c1 + c5);

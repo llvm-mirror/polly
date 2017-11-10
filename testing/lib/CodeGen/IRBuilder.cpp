@@ -15,11 +15,14 @@
 #include "polly/CodeGen/IRBuilder.h"
 #include "polly/ScopInfo.h"
 #include "polly/Support/ScopHelper.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/Support/Debug.h"
 
 using namespace llvm;
 using namespace polly;
+
+static const int MaxArraysInAliasScops = 10;
 
 /// Get a self referencing id metadata node.
 ///
@@ -58,13 +61,28 @@ void ScopAnnotator::buildAliasScopes(Scop &S) {
   AliasScopeMap.clear();
   OtherAliasScopeListMap.clear();
 
+  // We are only interested in arrays, but no scalar references. Scalars should
+  // be handled easily by basicaa.
+  SmallVector<ScopArrayInfo *, 10> Arrays;
+  for (ScopArrayInfo *Array : S.arrays())
+    if (Array->isArrayKind())
+      Arrays.push_back(Array);
+
+  // The construction of alias scopes is quadratic in the number of arrays
+  // involved. In case of too many arrays, skip the construction of alias
+  // information to avoid quadratic increases in compile time and code size.
+  if (Arrays.size() > MaxArraysInAliasScops)
+    return;
+
   std::string AliasScopeStr = "polly.alias.scope.";
-  for (const ScopArrayInfo *Array : S.arrays())
+  for (const ScopArrayInfo *Array : Arrays) {
+    assert(Array->getBasePtr() && "Base pointer must be present");
     AliasScopeMap[Array->getBasePtr()] =
         getID(Ctx, AliasScopeDomain,
               MDString::get(Ctx, (AliasScopeStr + Array->getName()).c_str()));
+  }
 
-  for (const ScopArrayInfo *Array : S.arrays()) {
+  for (const ScopArrayInfo *Array : Arrays) {
     MDNode *AliasScopeList = MDNode::get(Ctx, {});
     for (const auto &AliasScopePair : AliasScopeMap) {
       if (Array->getBasePtr() == AliasScopePair.first)
@@ -104,15 +122,72 @@ void ScopAnnotator::popLoop(bool IsParallel) {
   ParallelLoops.pop_back();
 }
 
-void ScopAnnotator::annotateLoopLatch(BranchInst *B, Loop *L,
-                                      bool IsParallel) const {
-  if (!IsParallel)
-    return;
+void ScopAnnotator::annotateLoopLatch(BranchInst *B, Loop *L, bool IsParallel,
+                                      bool IsLoopVectorizerDisabled) const {
+  MDNode *MData = nullptr;
 
-  assert(!ParallelLoops.empty() && "Expected a parallel loop to annotate");
-  MDNode *Ids = ParallelLoops.back();
-  MDNode *Id = cast<MDNode>(Ids->getOperand(Ids->getNumOperands() - 1));
-  B->setMetadata("llvm.loop", Id);
+  if (IsLoopVectorizerDisabled) {
+    SmallVector<Metadata *, 3> Args;
+    LLVMContext &Ctx = SE->getContext();
+    Args.push_back(MDString::get(Ctx, "llvm.loop.vectorize.enable"));
+    auto *FalseValue = ConstantInt::get(Type::getInt1Ty(Ctx), 0);
+    Args.push_back(ValueAsMetadata::get(FalseValue));
+    MData = MDNode::concatenate(MData, getID(Ctx, MDNode::get(Ctx, Args)));
+  }
+
+  if (IsParallel) {
+    assert(!ParallelLoops.empty() && "Expected a parallel loop to annotate");
+    MDNode *Ids = ParallelLoops.back();
+    MDNode *Id = cast<MDNode>(Ids->getOperand(Ids->getNumOperands() - 1));
+    MData = MDNode::concatenate(MData, Id);
+  }
+
+  B->setMetadata("llvm.loop", MData);
+}
+
+/// Get the pointer operand
+///
+/// @param Inst The instruction to be analyzed.
+/// @return the pointer operand in case @p Inst is a memory access
+///         instruction and nullptr otherwise.
+static llvm::Value *getMemAccInstPointerOperand(Instruction *Inst) {
+  auto MemInst = MemAccInst::dyn_cast(Inst);
+  if (!MemInst)
+    return nullptr;
+
+  return MemInst.getPointerOperand();
+}
+
+void ScopAnnotator::annotateSecondLevel(llvm::Instruction *Inst,
+                                        llvm::Value *BasePtr) {
+  auto *PtrSCEV = SE->getSCEV(getMemAccInstPointerOperand(Inst));
+  auto *BasePtrSCEV = SE->getPointerBase(PtrSCEV);
+
+  if (!PtrSCEV)
+    return;
+  auto SecondLevelAliasScope = SecondLevelAliasScopeMap.lookup(PtrSCEV);
+  auto SecondLevelOtherAliasScopeList =
+      SecondLevelOtherAliasScopeListMap.lookup(PtrSCEV);
+  if (!SecondLevelAliasScope) {
+    auto AliasScope = AliasScopeMap.lookup(BasePtr);
+    if (!AliasScope)
+      return;
+    LLVMContext &Ctx = SE->getContext();
+    SecondLevelAliasScope = getID(
+        Ctx, AliasScope, MDString::get(Ctx, "second level alias metadata"));
+    SecondLevelAliasScopeMap[PtrSCEV] = SecondLevelAliasScope;
+    Metadata *Args = {SecondLevelAliasScope};
+    auto SecondLevelBasePtrAliasScopeList =
+        SecondLevelAliasScopeMap.lookup(BasePtrSCEV);
+    SecondLevelAliasScopeMap[BasePtrSCEV] = MDNode::concatenate(
+        SecondLevelBasePtrAliasScopeList, MDNode::get(Ctx, Args));
+    auto OtherAliasScopeList = OtherAliasScopeListMap.lookup(BasePtr);
+    SecondLevelOtherAliasScopeList = MDNode::concatenate(
+        OtherAliasScopeList, SecondLevelBasePtrAliasScopeList);
+    SecondLevelOtherAliasScopeListMap[PtrSCEV] = SecondLevelOtherAliasScopeList;
+  }
+  Inst->setMetadata("alias.scope", SecondLevelAliasScope);
+  Inst->setMetadata("noalias", SecondLevelOtherAliasScopeList);
 }
 
 void ScopAnnotator::annotate(Instruction *Inst) {
@@ -126,11 +201,7 @@ void ScopAnnotator::annotate(Instruction *Inst) {
   if (!AliasScopeDomain)
     return;
 
-  auto MemInst = MemAccInst::dyn_cast(Inst);
-  if (!MemInst)
-    return;
-
-  auto *Ptr = MemInst.getPointerOperand();
+  auto *Ptr = getMemAccInstPointerOperand(Inst);
   if (!Ptr)
     return;
 
@@ -162,6 +233,18 @@ void ScopAnnotator::annotate(Instruction *Inst) {
          "BasePtr either expected in AliasScopeMap and OtherAlias...Map");
   auto *OtherAliasScopeList = OtherAliasScopeListMap[BasePtr];
 
+  if (InterIterationAliasFreeBasePtrs.count(BasePtr)) {
+    annotateSecondLevel(Inst, BasePtr);
+    return;
+  }
+
   Inst->setMetadata("alias.scope", AliasScope);
   Inst->setMetadata("noalias", OtherAliasScopeList);
+}
+
+void ScopAnnotator::addInterIterationAliasFreeBasePtr(llvm::Value *BasePtr) {
+  if (!BasePtr)
+    return;
+
+  InterIterationAliasFreeBasePtrs.insert(BasePtr);
 }

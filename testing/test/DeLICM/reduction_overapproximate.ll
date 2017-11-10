@@ -1,5 +1,6 @@
-; RUN: opt %loadPolly -polly-flatten-schedule -polly-delicm-overapproximate-writes=true -polly-delicm -analyze < %s | FileCheck %s --check-prefix=APPROX
-; RUN: opt %loadPolly -polly-flatten-schedule -polly-delicm-overapproximate-writes=false -polly-delicm -analyze < %s | FileCheck %s --check-prefix=EXACT
+; RUN: opt %loadPolly -polly-flatten-schedule -polly-delicm-compute-known=true -polly-delicm-overapproximate-writes=true -polly-delicm-partial-writes=false -polly-delicm -analyze < %s | FileCheck %s --check-prefix=APPROX
+; RUN: opt %loadPolly -polly-flatten-schedule -polly-delicm-compute-known=true -polly-delicm-overapproximate-writes=false -polly-delicm-partial-writes=false  -polly-delicm -analyze < %s | FileCheck %s --check-prefix=EXACT
+; RUN: opt %loadPolly -polly-flatten-schedule -polly-delicm-compute-known=true -polly-delicm-partial-writes=true -polly-delicm -analyze < %s | FileCheck %s --check-prefix=PARTIAL
 ;
 ;    void func(double *A {
 ;      for (int j = -1; j < 3; j += 1) { /* outer */
@@ -69,47 +70,89 @@ return:
   ret void
 }
 
-; TODO: MemRef_phi__phi[] should be mapped to A[j-1] as as well, but it is
-;       occupied by %add. It is actually the same value but DeLICM currently
-;       does not known without the "Known"-extension.
 
 ; APPROX:      After accesses {
 ; APPROX-NEXT:     Stmt_reduction_checkloop
 ; APPROX-NEXT:             MustWriteAccess :=  [Reduction Type: NONE] [Scalar: 1]
 ; APPROX-NEXT:                 { Stmt_reduction_checkloop[i0] -> MemRef_val__phi[] };
-; APPROX-NEXT:            new: { Stmt_reduction_checkloop[i0] -> MemRef_A[-1 + i0] : 0 <= i0 <= 3 };
+; APPROX-NEXT:            new: { Stmt_reduction_checkloop[i0] -> MemRef_A[-1 + i0] };
 ; APPROX-NEXT:     Stmt_reduction_preheader
 ; APPROX-NEXT:             MustWriteAccess :=  [Reduction Type: NONE] [Scalar: 1]
 ; APPROX-NEXT:                 { Stmt_reduction_preheader[i0] -> MemRef_phi__phi[] };
+; APPROX-NEXT:            new: { Stmt_reduction_preheader[i0] -> MemRef_A[-1 + i0] };
 ; APPROX-NEXT:     Stmt_reduction_for
 ; APPROX-NEXT:             ReadAccess :=       [Reduction Type: NONE] [Scalar: 1]
 ; APPROX-NEXT:                 { Stmt_reduction_for[i0, i1] -> MemRef_phi__phi[] };
+; APPROX-NEXT:            new: { Stmt_reduction_for[i0, i1] -> MemRef_A[-1 + i0] };
 ; APPROX-NEXT:             MustWriteAccess :=  [Reduction Type: NONE] [Scalar: 1]
 ; APPROX-NEXT:                 { Stmt_reduction_for[i0, i1] -> MemRef_phi[] };
-; APPROX-NEXT:            new: { Stmt_reduction_for[i0, i1] -> MemRef_A[-1 + i0] : i0 <= 3 and i1 >= 0 and 2 - 3i0 <= i1 <= 11 - 3i0 and i1 <= 2 and i1 <= -2 + i0 };
+; APPROX-NEXT:            new: { Stmt_reduction_for[i0, i1] -> MemRef_A[-1 + i0] };
 ; APPROX-NEXT:     Stmt_body
 ; APPROX-NEXT:            MustWriteAccess :=  [Reduction Type: NONE] [Scalar: 1]
 ; APPROX-NEXT:                { Stmt_body[i0, i1] -> MemRef_add[] };
-; APPROX-NEXT:           new: { Stmt_body[i0, i1] -> MemRef_A[-1 + i0] : i0 <= 3 and i1 >= 0 and 2 - 3i0 <= i1 <= 10 - 3i0 and i1 <= 1 and i1 <= -2 + i0 };
+; APPROX-NEXT:           new: { Stmt_body[i0, i1] -> MemRef_A[-1 + i0] };
 ; APPROX-NEXT:            ReadAccess :=       [Reduction Type: NONE] [Scalar: 1]
 ; APPROX-NEXT:                { Stmt_body[i0, i1] -> MemRef_phi[] };
-; APPROX-NEXT:           new: { Stmt_body[i0, i1] -> MemRef_A[-1 + i0] : i0 <= 3 and 0 <= i1 <= -2 + i0 };
+; APPROX-NEXT:           new: { Stmt_body[i0, i1] -> MemRef_A[-1 + i0] };
 ; APPROX-NEXT:     Stmt_reduction_inc
 ; APPROX-NEXT:             ReadAccess :=       [Reduction Type: NONE] [Scalar: 1]
 ; APPROX-NEXT:                 { Stmt_reduction_inc[i0, i1] -> MemRef_add[] };
-; APPROX-NEXT:            new: { Stmt_reduction_inc[i0, i1] -> MemRef_A[-1 + i0] : i0 <= 3 and 0 <= i1 <= -2 + i0 };
+; APPROX-NEXT:            new: { Stmt_reduction_inc[i0, i1] -> MemRef_A[-1 + i0] };
 ; APPROX-NEXT:             MustWriteAccess :=  [Reduction Type: NONE] [Scalar: 1]
 ; APPROX-NEXT:                 { Stmt_reduction_inc[i0, i1] -> MemRef_phi__phi[] };
+; APPROX-NEXT:            new: { Stmt_reduction_inc[i0, i1] -> MemRef_A[2] };
 ; APPROX-NEXT:             MustWriteAccess :=  [Reduction Type: NONE] [Scalar: 1]
 ; APPROX-NEXT:                 { Stmt_reduction_inc[i0, i1] -> MemRef_val__phi[] };
-; APPROX-NEXT:            new: { Stmt_reduction_inc[i0, i1] -> MemRef_A[-1 + i0] : 2 <= i0 <= 3 and 0 <= i1 <= -2 + i0 };
+; APPROX-NEXT:            new: { Stmt_reduction_inc[i0, i1] -> MemRef_A[-1 + i0] };
 ; APPROX-NEXT:     Stmt_reduction_exit
 ; APPROX-NEXT:             ReadAccess :=       [Reduction Type: NONE] [Scalar: 1]
 ; APPROX-NEXT:                 { Stmt_reduction_exit[i0] -> MemRef_val__phi[] };
-; APPROX-NEXT:            new: { Stmt_reduction_exit[i0] -> MemRef_A[-1 + i0] : 0 <= i0 <= 3 };
+; APPROX-NEXT:            new: { Stmt_reduction_exit[i0] -> MemRef_A[-1 + i0] };
 ; APPROX-NEXT:             MustWriteAccess :=  [Reduction Type: NONE] [Scalar: 0]
 ; APPROX-NEXT:                 { Stmt_reduction_exit[i0] -> MemRef_A[-1 + i0] };
 ; APPROX-NEXT: }
 
 
 ; EXACT: No modification has been made
+
+
+; PARTIAL:      After accesses {
+; PARTIAL-NEXT:     Stmt_reduction_checkloop
+; PARTIAL-NEXT:             MustWriteAccess :=  [Reduction Type: NONE] [Scalar: 1]
+; PARTIAL-NEXT:                 { Stmt_reduction_checkloop[i0] -> MemRef_val__phi[] };
+; PARTIAL-NEXT:            new: { Stmt_reduction_checkloop[i0] -> MemRef_A[-1 + i0] : i0 <= 1 };
+; PARTIAL-NEXT:     Stmt_reduction_preheader
+; PARTIAL-NEXT:             MustWriteAccess :=  [Reduction Type: NONE] [Scalar: 1]
+; PARTIAL-NEXT:                 { Stmt_reduction_preheader[i0] -> MemRef_phi__phi[] };
+; PARTIAL-NEXT:            new: { Stmt_reduction_preheader[i0] -> MemRef_A[-1 + i0] };
+; PARTIAL-NEXT:     Stmt_reduction_for
+; PARTIAL-NEXT:             ReadAccess :=       [Reduction Type: NONE] [Scalar: 1]
+; PARTIAL-NEXT:                 { Stmt_reduction_for[i0, i1] -> MemRef_phi__phi[] };
+; PARTIAL-NEXT:            new: { Stmt_reduction_for[i0, i1] -> MemRef_A[-1 + i0] };
+; PARTIAL-NEXT:             MustWriteAccess :=  [Reduction Type: NONE] [Scalar: 1]
+; PARTIAL-NEXT:                 { Stmt_reduction_for[i0, i1] -> MemRef_phi[] };
+; PARTIAL-NEXT:            new: { Stmt_reduction_for[i0, i1] -> MemRef_A[-1 + i0] };
+; PARTIAL-NEXT:     Stmt_body
+; PARTIAL-NEXT:             MustWriteAccess :=  [Reduction Type: NONE] [Scalar: 1]
+; PARTIAL-NEXT:                 { Stmt_body[i0, i1] -> MemRef_add[] };
+; PARTIAL-NEXT:            new: { Stmt_body[i0, i1] -> MemRef_A[-1 + i0] };
+; PARTIAL-NEXT:             ReadAccess :=       [Reduction Type: NONE] [Scalar: 1]
+; PARTIAL-NEXT:                 { Stmt_body[i0, i1] -> MemRef_phi[] };
+; PARTIAL-NEXT:            new: { Stmt_body[i0, i1] -> MemRef_A[-1 + i0] };
+; PARTIAL-NEXT:     Stmt_reduction_inc
+; PARTIAL-NEXT:             ReadAccess :=       [Reduction Type: NONE] [Scalar: 1]
+; PARTIAL-NEXT:                 { Stmt_reduction_inc[i0, i1] -> MemRef_add[] };
+; PARTIAL-NEXT:            new: { Stmt_reduction_inc[i0, i1] -> MemRef_A[-1 + i0] };
+; PARTIAL-NEXT:             MustWriteAccess :=  [Reduction Type: NONE] [Scalar: 1]
+; PARTIAL-NEXT:                 { Stmt_reduction_inc[i0, i1] -> MemRef_phi__phi[] };
+; PARTIAL-NEXT:            new: { Stmt_reduction_inc[3, 0] -> MemRef_A[2] };
+; PARTIAL-NEXT:             MustWriteAccess :=  [Reduction Type: NONE] [Scalar: 1]
+; PARTIAL-NEXT:                 { Stmt_reduction_inc[i0, i1] -> MemRef_val__phi[] };
+; PARTIAL-NEXT:            new: { Stmt_reduction_inc[i0, -2 + i0] -> MemRef_A[-1 + i0] };
+; PARTIAL-NEXT:     Stmt_reduction_exit
+; PARTIAL-NEXT:             ReadAccess :=       [Reduction Type: NONE] [Scalar: 1]
+; PARTIAL-NEXT:                 { Stmt_reduction_exit[i0] -> MemRef_val__phi[] };
+; PARTIAL-NEXT:            new: { Stmt_reduction_exit[i0] -> MemRef_A[-1 + i0] };
+; PARTIAL-NEXT:             MustWriteAccess :=  [Reduction Type: NONE] [Scalar: 0]
+; PARTIAL-NEXT:                 { Stmt_reduction_exit[i0] -> MemRef_A[-1 + i0] };
+; PARTIAL-NEXT: }

@@ -1,4 +1,4 @@
-//===--- ScopDetection.h - Detect Scops -------------------------*- C++ -*-===//
+//===- ScopDetection.h - Detect Scops ---------------------------*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -13,7 +13,7 @@
 // that only has statically known control flow and can therefore be described
 // within the polyhedral model.
 //
-// Every Scop fullfills these restrictions:
+// Every Scop fulfills these restrictions:
 //
 // * It is a single entry single exit region
 //
@@ -44,37 +44,58 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef POLLY_SCOP_DETECTION_H
-#define POLLY_SCOP_DETECTION_H
+#ifndef POLLY_SCOPDETECTION_H
+#define POLLY_SCOPDETECTION_H
 
 #include "polly/ScopDetectionDiagnostic.h"
 #include "polly/Support/ScopHelper.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/AliasSetTracker.h"
 #include "llvm/Analysis/RegionInfo.h"
+#include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Pass.h"
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <set>
+#include <string>
+#include <utility>
+#include <vector>
 
 using namespace llvm;
 
 namespace llvm {
-class LoopInfo;
+
+class BasicBlock;
+class BranchInst;
+class CallInst;
+class DebugLoc;
+class DominatorTree;
+class Function;
+class Instruction;
+class IntrinsicInst;
 class Loop;
+class LoopInfo;
+class OptimizationRemarkEmitter;
+class PassRegistry;
+class raw_ostream;
 class ScalarEvolution;
 class SCEV;
-class SCEVAddRecExpr;
 class SCEVUnknown;
-class CallInst;
-class Instruction;
+class SwitchInst;
 class Value;
-class IntrinsicInst;
+
+void initializeScopDetectionWrapperPassPass(PassRegistry &);
+
 } // namespace llvm
 
 namespace polly {
-typedef std::set<const SCEV *> ParamSetType;
+
+using ParamSetType = std::set<const SCEV *>;
 
 // Description of the shape of an array.
 struct ArrayShape {
@@ -84,7 +105,7 @@ struct ArrayShape {
   // Sizes of each delinearized dimension.
   SmallVector<const SCEV *, 4> DelinearizedSizes;
 
-  ArrayShape(const SCEVUnknown *B) : BasePointer(B), DelinearizedSizes() {}
+  ArrayShape(const SCEVUnknown *B) : BasePointer(B) {}
 };
 
 struct MemAcc {
@@ -97,14 +118,14 @@ struct MemAcc {
   SmallVector<const SCEV *, 4> DelinearizedSubscripts;
 
   MemAcc(const Instruction *I, std::shared_ptr<ArrayShape> S)
-      : Insn(I), Shape(S), DelinearizedSubscripts() {}
+      : Insn(I), Shape(S) {}
 };
 
-typedef std::map<const Instruction *, MemAcc> MapInsnToMemAcc;
-typedef std::pair<const Instruction *, const SCEV *> PairInstSCEV;
-typedef std::vector<PairInstSCEV> AFs;
-typedef std::map<const SCEVUnknown *, AFs> BaseToAFs;
-typedef std::map<const SCEVUnknown *, const SCEV *> BaseToElSize;
+using MapInsnToMemAcc = std::map<const Instruction *, MemAcc>;
+using PairInstSCEV = std::pair<const Instruction *, const SCEV *>;
+using AFs = std::vector<PairInstSCEV>;
+using BaseToAFs = std::map<const SCEVUnknown *, AFs>;
+using BaseToElSize = std::map<const SCEVUnknown *, const SCEV *>;
 
 extern bool PollyTrackFailures;
 extern bool PollyDelinearize;
@@ -112,16 +133,17 @@ extern bool PollyUseRuntimeAliasChecks;
 extern bool PollyProcessUnprofitable;
 extern bool PollyInvariantLoadHoisting;
 extern bool PollyAllowUnsignedOperations;
+extern bool PollyAllowFullFunction;
 
 /// A function attribute which will cause Polly to skip the function
-extern llvm::StringRef PollySkipFnAttr;
+extern StringRef PollySkipFnAttr;
 
 //===----------------------------------------------------------------------===//
 /// Pass to detect the maximal static control parts (Scops) of a
 /// function.
-class ScopDetection : public FunctionPass {
+class ScopDetection {
 public:
-  typedef SetVector<const Region *> RegionSet;
+  using RegionSet = SetVector<const Region *>;
 
   // Remember the valid regions
   RegionSet ValidRegions;
@@ -149,13 +171,13 @@ public:
     BaseToElSize ElementSize;
 
     /// The region has at least one load instruction.
-    bool hasLoads;
+    bool hasLoads = false;
 
     /// The region has at least one store instruction.
-    bool hasStores;
+    bool hasStores = false;
 
     /// Flag to indicate the region has at least one unknown access.
-    bool HasUnknownAccess;
+    bool HasUnknownAccess = false;
 
     /// The set of non-affine subregions in the region we analyze.
     RegionSet NonAffineSubRegionSet;
@@ -172,8 +194,7 @@ public:
 
     /// Initialize a DetectionContext from scratch.
     DetectionContext(Region &R, AliasAnalysis &AA, bool Verify)
-        : CurRegion(R), AST(AA), Verifying(Verify), Log(&R), hasLoads(false),
-          hasStores(false), HasUnknownAccess(false) {}
+        : CurRegion(R), AST(AA), Verifying(Verify), Log(&R) {}
 
     /// Initialize a DetectionContext with the data from @p DC.
     DetectionContext(const DetectionContext &&DC)
@@ -198,16 +219,14 @@ public:
 
 private:
   //===--------------------------------------------------------------------===//
-  ScopDetection(const ScopDetection &) = delete;
-  const ScopDetection &operator=(const ScopDetection &) = delete;
 
-  /// Analysis passes used.
+  /// Analyses used
   //@{
-  const DominatorTree *DT;
-  ScalarEvolution *SE;
-  LoopInfo *LI;
-  RegionInfo *RI;
-  AliasAnalysis *AA;
+  const DominatorTree &DT;
+  ScalarEvolution &SE;
+  LoopInfo &LI;
+  RegionInfo &RI;
+  AliasAnalysis &AA;
   //@}
 
   /// Map to remember detection contexts for all regions.
@@ -277,7 +296,7 @@ private:
   /// Check if all accesses to a given BasePointer are affine.
   ///
   /// @param Context     The current detection context.
-  /// @param basepointer the base pointer we are interested in.
+  /// @param BasePointer the base pointer we are interested in.
   /// @param Scope       The location where @p BasePointer is being used.
   /// @param True if consistent (multi-dimensional) array accesses could be
   ///        derived for this array.
@@ -308,8 +327,8 @@ private:
   /// Check if a region has sufficient compute instructions.
   ///
   /// This function checks if a region has a non-trivial number of instructions
-  /// in each loop. This can be used as an indicator if a loop is worth
-  /// optimising.
+  /// in each loop. This can be used as an indicator whether a loop is worth
+  /// optimizing.
   ///
   /// @param Context  The context of scop detection.
   /// @param NumLoops The number of loops in the region.
@@ -495,7 +514,7 @@ private:
   /// Check if the function @p F is marked as invalid.
   ///
   /// @note An OpenMP subfunction will be marked as invalid.
-  bool isValidFunction(llvm::Function &F);
+  bool isValidFunction(Function &F);
 
   /// Can ISL compute the trip count of a loop.
   ///
@@ -506,7 +525,7 @@ private:
   bool canUseISLTripCount(Loop *L, DetectionContext &Context) const;
 
   /// Print the locations of all detected scops.
-  void printLocations(llvm::Function &F);
+  void printLocations(Function &F);
 
   /// Check if a region is reducible or not.
   ///
@@ -527,16 +546,17 @@ private:
                       Args &&... Arguments) const;
 
 public:
-  static char ID;
-  explicit ScopDetection();
+  ScopDetection(Function &F, const DominatorTree &DT, ScalarEvolution &SE,
+                LoopInfo &LI, RegionInfo &RI, AliasAnalysis &AA,
+                OptimizationRemarkEmitter &ORE);
 
   /// Get the RegionInfo stored in this pass.
   ///
   /// This was added to give the DOT printer easy access to this information.
-  RegionInfo *getRI() const { return RI; }
+  RegionInfo *getRI() const { return &RI; }
 
   /// Get the LoopInfo stored in this pass.
-  LoopInfo *getLI() const { return LI; }
+  LoopInfo *getLI() const { return &LI; }
 
   /// Is the region is the maximum region of a Scop?
   ///
@@ -568,8 +588,8 @@ public:
   /// These iterators iterator over all maximum region in Scops of this
   /// function.
   //@{
-  typedef RegionSet::iterator iterator;
-  typedef RegionSet::const_iterator const_iterator;
+  using iterator = RegionSet::iterator;
+  using const_iterator = RegionSet::const_iterator;
 
   iterator begin() { return ValidRegions.begin(); }
   iterator end() { return ValidRegions.end(); }
@@ -598,14 +618,6 @@ public:
   /// @param R The Region to verify.
   void verifyRegion(const Region &R) const;
 
-  /// @name FunctionPass interface
-  //@{
-  virtual void getAnalysisUsage(AnalysisUsage &AU) const;
-  virtual void releaseMemory();
-  virtual bool runOnFunction(Function &F);
-  virtual void print(raw_ostream &OS, const Module *) const;
-  //@}
-
   /// Count the number of loops and the maximal loop depth in @p R.
   ///
   /// @param R The region to check
@@ -617,13 +629,48 @@ public:
   static ScopDetection::LoopStats
   countBeneficialLoops(Region *R, ScalarEvolution &SE, LoopInfo &LI,
                        unsigned MinProfitableTrips);
+
+private:
+  /// OptimizationRemarkEmitter object used to emit diagnostic remarks
+  OptimizationRemarkEmitter &ORE;
 };
 
-} // end namespace polly
+struct ScopAnalysis : public AnalysisInfoMixin<ScopAnalysis> {
+  static AnalysisKey Key;
 
-namespace llvm {
-class PassRegistry;
-void initializeScopDetectionPass(llvm::PassRegistry &);
-} // namespace llvm
+  using Result = ScopDetection;
 
-#endif
+  ScopAnalysis();
+
+  Result run(Function &F, FunctionAnalysisManager &FAM);
+};
+
+struct ScopAnalysisPrinterPass : public PassInfoMixin<ScopAnalysisPrinterPass> {
+  ScopAnalysisPrinterPass(raw_ostream &OS) : OS(OS) {}
+
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &FAM);
+
+  raw_ostream &OS;
+};
+
+struct ScopDetectionWrapperPass : public FunctionPass {
+  static char ID;
+  std::unique_ptr<ScopDetection> Result;
+
+  ScopDetectionWrapperPass();
+
+  /// @name FunctionPass interface
+  //@{
+  void getAnalysisUsage(AnalysisUsage &AU) const override;
+  void releaseMemory() override;
+  bool runOnFunction(Function &F) override;
+  void print(raw_ostream &OS, const Module *) const override;
+  //@}
+
+  ScopDetection &getSD() { return *Result; }
+  const ScopDetection &getSD() const { return *Result; }
+};
+
+} // namespace polly
+
+#endif // POLLY_SCOPDETECTION_H

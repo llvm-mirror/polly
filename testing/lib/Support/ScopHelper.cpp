@@ -194,13 +194,19 @@ static BasicBlock *splitBlock(BasicBlock *Old, Instruction *SplitPt,
   return NewBlock;
 }
 
-void polly::splitEntryBlockForAlloca(BasicBlock *EntryBlock, Pass *P) {
-  // Find first non-alloca instruction. Every basic block has a non-alloc
+void polly::splitEntryBlockForAlloca(BasicBlock *EntryBlock, DominatorTree *DT,
+                                     LoopInfo *LI, RegionInfo *RI) {
+  // Find first non-alloca instruction. Every basic block has a non-alloca
   // instruction, as every well formed basic block has a terminator.
   BasicBlock::iterator I = EntryBlock->begin();
   while (isa<AllocaInst>(I))
     ++I;
 
+  // splitBlock updates DT, LI and RI.
+  splitBlock(EntryBlock, &*I, DT, LI, RI);
+}
+
+void polly::splitEntryBlockForAlloca(BasicBlock *EntryBlock, Pass *P) {
   auto *DTWP = P->getAnalysisIfAvailable<DominatorTreeWrapperPass>();
   auto *DT = DTWP ? &DTWP->getDomTree() : nullptr;
   auto *LIWP = P->getAnalysisIfAvailable<LoopInfoWrapperPass>();
@@ -209,7 +215,7 @@ void polly::splitEntryBlockForAlloca(BasicBlock *EntryBlock, Pass *P) {
   RegionInfo *RI = RIP ? &RIP->getRegionInfo() : nullptr;
 
   // splitBlock updates DT, LI and RI.
-  splitBlock(EntryBlock, &*I, DT, LI, RI);
+  polly::splitEntryBlockForAlloca(EntryBlock, DT, LI, RI);
 }
 
 /// The SCEVExpander will __not__ generate any code for an existing SDiv/SRem
@@ -380,9 +386,15 @@ bool polly::isErrorBlock(BasicBlock &BB, const Region &R, LoopInfo &LI,
   // Basic blocks that are always executed are not considered error blocks,
   // as their execution can not be a rare event.
   bool DominatesAllPredecessors = true;
-  for (auto Pred : predecessors(R.getExit()))
-    if (R.contains(Pred) && !DT.dominates(&BB, Pred))
-      DominatesAllPredecessors = false;
+  if (R.isTopLevelRegion()) {
+    for (BasicBlock &I : *R.getEntry()->getParent())
+      if (isa<ReturnInst>(I.getTerminator()) && !DT.dominates(&BB, &I))
+        DominatesAllPredecessors = false;
+  } else {
+    for (auto Pred : predecessors(R.getExit()))
+      if (R.contains(Pred) && !DT.dominates(&BB, Pred))
+        DominatesAllPredecessors = false;
+  }
 
   if (DominatesAllPredecessors)
     return false;
@@ -394,14 +406,26 @@ bool polly::isErrorBlock(BasicBlock &BB, const Region &R, LoopInfo &LI,
   //        not post dominated by the load and check if it is a conditional
   //        or a loop header.
   auto *DTNode = DT.getNode(&BB);
-  auto *IDomBB = DTNode->getIDom()->getBlock();
+  if (!DTNode)
+    return false;
+
+  DTNode = DTNode->getIDom();
+
+  if (!DTNode)
+    return false;
+
+  auto *IDomBB = DTNode->getBlock();
   if (LI.isLoopHeader(IDomBB))
     return false;
 
   for (Instruction &Inst : BB)
     if (CallInst *CI = dyn_cast<CallInst>(&Inst)) {
       if (isIgnoredIntrinsic(CI))
-        return false;
+        continue;
+
+      // memset, memcpy and memmove are modeled intrinsics.
+      if (isa<MemSetInst>(CI) || isa<MemTransferInst>(CI))
+        continue;
 
       if (!CI->doesNotAccessMemory())
         return true;
@@ -477,8 +501,7 @@ bool polly::isIgnoredIntrinsic(const Value *V) {
     case llvm::Intrinsic::annotation:
     case llvm::Intrinsic::donothing:
     case llvm::Intrinsic::assume:
-    case llvm::Intrinsic::expect:
-    // Some debug info intrisics are supported/ignored.
+    // Some debug info intrinsics are supported/ignored.
     case llvm::Intrinsic::dbg_value:
     case llvm::Intrinsic::dbg_declare:
       return true;
@@ -494,15 +517,16 @@ bool polly::canSynthesize(const Value *V, const Scop &S, ScalarEvolution *SE,
   if (!V || !SE->isSCEVable(V->getType()))
     return false;
 
+  const InvariantLoadsSetTy &ILS = S.getRequiredInvariantLoads();
   if (const SCEV *Scev = SE->getSCEVAtScope(const_cast<Value *>(V), Scope))
     if (!isa<SCEVCouldNotCompute>(Scev))
-      if (!hasScalarDepsInsideRegion(Scev, &S.getRegion(), Scope, false))
+      if (!hasScalarDepsInsideRegion(Scev, &S.getRegion(), Scope, false, ILS))
         return true;
 
   return false;
 }
 
-llvm::BasicBlock *polly::getUseBlock(llvm::Use &U) {
+llvm::BasicBlock *polly::getUseBlock(const llvm::Use &U) {
   Instruction *UI = dyn_cast<Instruction>(U.getUser());
   if (!UI)
     return nullptr;

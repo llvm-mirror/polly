@@ -117,6 +117,17 @@ raw_ostream &operator<<(raw_ostream &OS, class ValidatorResult &VR) {
   return OS;
 }
 
+bool polly::isConstCall(llvm::CallInst *Call) {
+  if (Call->mayReadOrWriteMemory())
+    return false;
+
+  for (auto &Operand : Call->arg_operands())
+    if (!isa<ConstantInt>(&Operand))
+      return false;
+
+  return true;
+}
+
 /// Check if a SCEV is valid in a SCoP.
 struct SCEVValidator
     : public SCEVVisitor<SCEVValidator, class ValidatorResult> {
@@ -306,6 +317,18 @@ public:
     return ValidatorResult(SCEVType::PARAM, S);
   }
 
+  ValidatorResult visitCallInstruction(Instruction *I, const SCEV *S) {
+    assert(I->getOpcode() == Instruction::Call && "Call instruction expected");
+
+    if (R->contains(I)) {
+      auto Call = cast<CallInst>(I);
+
+      if (!isConstCall(Call))
+        return ValidatorResult(SCEVType::INVALID, S);
+    }
+    return ValidatorResult(SCEVType::PARAM, S);
+  }
+
   ValidatorResult visitLoadInstruction(Instruction *I, const SCEV *S) {
     if (R->contains(I) && ILS) {
       ILS->insert(cast<LoadInst>(I));
@@ -396,6 +419,8 @@ public:
         return visitSDivInstruction(I, Expr);
       case Instruction::SRem:
         return visitSRemInstruction(I, Expr);
+      case Instruction::Call:
+        return visitCallInstruction(I, Expr);
       default:
         return visitGenericInst(I, Expr);
       }
@@ -405,20 +430,69 @@ public:
   }
 };
 
+class SCEVHasIVParams {
+  bool HasIVParams = false;
+
+public:
+  SCEVHasIVParams() {}
+
+  bool follow(const SCEV *S) {
+    const SCEVUnknown *Unknown = dyn_cast<SCEVUnknown>(S);
+    if (!Unknown)
+      return true;
+
+    CallInst *Call = dyn_cast<CallInst>(Unknown->getValue());
+
+    if (!Call)
+      return true;
+
+    if (isConstCall(Call)) {
+      HasIVParams = true;
+      return false;
+    }
+
+    return true;
+  }
+
+  bool isDone() { return HasIVParams; }
+  bool hasIVParams() { return HasIVParams; }
+};
+
 /// Check whether a SCEV refers to an SSA name defined inside a region.
 class SCEVInRegionDependences {
   const Region *R;
   Loop *Scope;
+  const InvariantLoadsSetTy &ILS;
   bool AllowLoops;
   bool HasInRegionDeps = false;
 
 public:
-  SCEVInRegionDependences(const Region *R, Loop *Scope, bool AllowLoops)
-      : R(R), Scope(Scope), AllowLoops(AllowLoops) {}
+  SCEVInRegionDependences(const Region *R, Loop *Scope, bool AllowLoops,
+                          const InvariantLoadsSetTy &ILS)
+      : R(R), Scope(Scope), ILS(ILS), AllowLoops(AllowLoops) {}
 
   bool follow(const SCEV *S) {
     if (auto Unknown = dyn_cast<SCEVUnknown>(S)) {
       Instruction *Inst = dyn_cast<Instruction>(Unknown->getValue());
+
+      CallInst *Call = dyn_cast<CallInst>(Unknown->getValue());
+
+      if (Call && isConstCall(Call))
+        return false;
+
+      if (Inst) {
+        // When we invariant load hoist a load, we first make sure that there
+        // can be no dependences created by it in the Scop region. So, we should
+        // not consider scalar dependences to `LoadInst`s that are invariant
+        // load hoisted.
+        //
+        // If this check is not present, then we create data dependences which
+        // are strictly not necessary by tracking the invariant load as a
+        // scalar.
+        LoadInst *LI = dyn_cast<LoadInst>(Inst);
+        if (LI && ILS.count(LI) > 0)
+          return false;
+      }
 
       // Return true when Inst is defined inside the region R.
       if (!Inst || !R->contains(Inst))
@@ -432,10 +506,6 @@ public:
       if (AllowLoops)
         return true;
 
-      if (!Scope) {
-        HasInRegionDeps = true;
-        return false;
-      }
       auto *L = AddRec->getLoop();
       if (R->contains(L) && !L->contains(Scope)) {
         HasInRegionDeps = true;
@@ -513,9 +583,17 @@ void findValues(const SCEV *Expr, ScalarEvolution &SE,
   ST.visitAll(Expr);
 }
 
+bool hasIVParams(const SCEV *Expr) {
+  SCEVHasIVParams HasIVParams;
+  SCEVTraversal<SCEVHasIVParams> ST(HasIVParams);
+  ST.visitAll(Expr);
+  return HasIVParams.hasIVParams();
+}
+
 bool hasScalarDepsInsideRegion(const SCEV *Expr, const Region *R,
-                               llvm::Loop *Scope, bool AllowLoops) {
-  SCEVInRegionDependences InRegionDeps(R, Scope, AllowLoops);
+                               llvm::Loop *Scope, bool AllowLoops,
+                               const InvariantLoadsSetTy &ILS) {
+  SCEVInRegionDependences InRegionDeps(R, Scope, AllowLoops, ILS);
   SCEVTraversal<SCEVInRegionDependences> ST(InRegionDeps);
   ST.visitAll(Expr);
   return InRegionDeps.hasDependences();
@@ -656,5 +734,46 @@ extractConstantFactor(const SCEV *S, ScalarEvolution &SE) {
       LeftOvers.push_back(Op);
 
   return std::make_pair(ConstPart, SE.getMulExpr(LeftOvers));
+}
+
+const SCEV *tryForwardThroughPHI(const SCEV *Expr, Region &R,
+                                 ScalarEvolution &SE, LoopInfo &LI,
+                                 const DominatorTree &DT) {
+  if (auto *Unknown = dyn_cast<SCEVUnknown>(Expr)) {
+    Value *V = Unknown->getValue();
+    auto *PHI = dyn_cast<PHINode>(V);
+    if (!PHI)
+      return Expr;
+
+    Value *Final = nullptr;
+
+    for (unsigned i = 0; i < PHI->getNumIncomingValues(); i++) {
+      BasicBlock *Incoming = PHI->getIncomingBlock(i);
+      if (isErrorBlock(*Incoming, R, LI, DT) && R.contains(Incoming))
+        continue;
+      if (Final)
+        return Expr;
+      Final = PHI->getIncomingValue(i);
+    }
+
+    if (Final)
+      return SE.getSCEV(Final);
+  }
+  return Expr;
+}
+
+Value *getUniqueNonErrorValue(PHINode *PHI, Region *R, LoopInfo &LI,
+                              const DominatorTree &DT) {
+  Value *V = nullptr;
+  for (unsigned i = 0; i < PHI->getNumIncomingValues(); i++) {
+    BasicBlock *BB = PHI->getIncomingBlock(i);
+    if (!isErrorBlock(*BB, *R, LI, DT)) {
+      if (V)
+        return nullptr;
+      V = PHI->getIncomingValue(i);
+    }
+  }
+
+  return V;
 }
 } // namespace polly

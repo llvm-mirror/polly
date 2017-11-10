@@ -72,7 +72,7 @@ using BoxedLoopsSetTy = llvm::SetVector<const llvm::Loop *>;
 /// those from llvm/Support/Casting.h. Partial template function specialization
 /// is currently not supported in C++ such that those cannot be used directly.
 /// (llvm::isa could, but then llvm:cast etc. would not have the expected
-/// behaviour)
+/// behavior)
 class MemAccInst {
 private:
   llvm::Instruction *I;
@@ -315,6 +315,16 @@ void simplifyRegion(llvm::Region *R, llvm::DominatorTree *DT,
 ///
 void splitEntryBlockForAlloca(llvm::BasicBlock *EntryBlock, llvm::Pass *P);
 
+/// Split the entry block of a function to store the newly inserted
+///        allocations outside of all Scops.
+///
+/// @param DT DominatorTree to be updated.
+/// @param LI LoopInfo to be updated.
+/// @param RI RegionInfo to be updated.
+void splitEntryBlockForAlloca(llvm::BasicBlock *EntryBlock,
+                              llvm::DominatorTree *DT, llvm::LoopInfo *LI,
+                              llvm::RegionInfo *RI);
+
 /// Wrapper for SCEVExpander extended to all Polly features.
 ///
 /// This wrapper will internally call the SCEVExpander but also makes sure that
@@ -331,7 +341,7 @@ void splitEntryBlockForAlloca(llvm::BasicBlock *EntryBlock, llvm::Pass *P);
 /// @param E     The expression for which code is actually generated.
 /// @param Ty    The type of the resulting code.
 /// @param IP    The insertion point for the new code.
-/// @param VMap  A remaping of values used in @p E.
+/// @param VMap  A remapping of values used in @p E.
 /// @param RTCBB The last block of the RTC. Used to insert loop-invariant
 ///              instructions in rare cases.
 llvm::Value *expandCodeFor(Scop &S, llvm::ScalarEvolution &SE,
@@ -342,7 +352,7 @@ llvm::Value *expandCodeFor(Scop &S, llvm::ScalarEvolution &SE,
 
 /// Check if the block is a error block.
 ///
-/// A error block is currently any block that fullfills at least one of
+/// A error block is currently any block that fulfills at least one of
 /// the following conditions:
 ///
 ///  - It is terminated by an unreachable instruction
@@ -350,7 +360,7 @@ llvm::Value *expandCodeFor(Scop &S, llvm::ScalarEvolution &SE,
 ///    dominated by a loop header and that does not dominate the region exit.
 ///    This is a heuristic to pick only error blocks that are conditionally
 ///    executed and can be assumed to be not executed at all without the domains
-///    beeing available.
+///    being available.
 ///
 /// @param BB The block to check.
 /// @param R  The analyzed region.
@@ -409,7 +419,7 @@ bool canSynthesize(const llvm::Value *V, const Scop &S,
 /// operand must be defined (i.e. its definition dominates this block).
 /// Non-instructions do not use operands at a specific point such that in this
 /// case this function returns nullptr.
-llvm::BasicBlock *getUseBlock(llvm::Use &U);
+llvm::BasicBlock *getUseBlock(const llvm::Use &U);
 
 /// Derive the individual index expressions from a GEP instruction.
 ///
@@ -432,7 +442,7 @@ getIndexExpressionsFromGEP(llvm::GetElementPtrInst *GEP,
 //
 // @param L             Pointer to the Loop object to analyze.
 // @param LI            Reference to the LoopInfo.
-// @param Boxed Loops   Set of Boxed Loops we get from the SCoP.
+// @param BoxedLoops    Set of Boxed Loops we get from the SCoP.
 llvm::Loop *getFirstNonBoxedLoopFor(llvm::Loop *L, llvm::LoopInfo &LI,
                                     const BoxedLoopsSetTy &BoxedLoops);
 
@@ -442,7 +452,7 @@ llvm::Loop *getFirstNonBoxedLoopFor(llvm::Loop *L, llvm::LoopInfo &LI,
 //
 // @param BB            Pointer to the Basic Block to analyze.
 // @param LI            Reference to the LoopInfo.
-// @param Boxed Loops   Set of Boxed Loops we get from the SCoP.
+// @param BoxedLoops    Set of Boxed Loops we get from the SCoP.
 llvm::Loop *getFirstNonBoxedLoopFor(llvm::BasicBlock *BB, llvm::LoopInfo &LI,
                                     const BoxedLoopsSetTy &BoxedLoops);
 } // namespace polly

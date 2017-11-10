@@ -10,6 +10,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/CodeGen/IslExprBuilder.h"
+#include "polly/CodeGen/RuntimeDebugBuilder.h"
 #include "polly/Options.h"
 #include "polly/ScopInfo.h"
 #include "polly/Support/GICHelper.h"
@@ -50,7 +51,7 @@ IslExprBuilder::IslExprBuilder(Scop &S, PollyIRBuilder &Builder,
 
 void IslExprBuilder::setTrackOverflow(bool Enable) {
   // If potential overflows are tracked always or never we ignore requests
-  // to change the behaviour.
+  // to change the behavior.
   if (OTMode != OT_REQUEST)
     return;
 
@@ -70,6 +71,32 @@ Value *IslExprBuilder::getOverflowState() const {
   if (OTMode == OT_NEVER)
     return Builder.getFalse();
   return OverflowState;
+}
+
+bool IslExprBuilder::hasLargeInts(isl::ast_expr Expr) {
+  enum isl_ast_expr_type Type = isl_ast_expr_get_type(Expr.get());
+
+  if (Type == isl_ast_expr_id)
+    return false;
+
+  if (Type == isl_ast_expr_int) {
+    isl::val Val = Expr.get_val();
+    APInt APValue = APIntFromVal(Val);
+    auto BitWidth = APValue.getBitWidth();
+    return BitWidth >= 64;
+  }
+
+  assert(Type == isl_ast_expr_op && "Expected isl_ast_expr of type operation");
+
+  int NumArgs = isl_ast_expr_get_op_n_arg(Expr.get());
+
+  for (int i = 0; i < NumArgs; i++) {
+    isl::ast_expr Operand = Expr.get_op_arg(i);
+    if (hasLargeInts(Operand))
+      return true;
+  }
+
+  return false;
 }
 
 Value *IslExprBuilder::createBinOp(BinaryOperator::BinaryOps Opc, Value *LHS,
@@ -225,11 +252,14 @@ Value *IslExprBuilder::createAccessAddress(isl_ast_expr *Expr) {
 
   const ScopArrayInfo *SAI = nullptr;
 
+  if (PollyDebugPrinting)
+    RuntimeDebugBuilder::createCPUPrinter(Builder, isl_id_get_name(BaseId));
+
   if (IDToSAI)
     SAI = (*IDToSAI)[BaseId];
 
   if (!SAI)
-    SAI = ScopArrayInfo::getFromId(BaseId);
+    SAI = ScopArrayInfo::getFromId(isl::manage(BaseId));
   else
     isl_id_free(BaseId);
 
@@ -252,6 +282,8 @@ Value *IslExprBuilder::createAccessAddress(isl_ast_expr *Expr) {
 
   if (isl_ast_expr_get_op_n_arg(Expr) == 1) {
     isl_ast_expr_free(Expr);
+    if (PollyDebugPrinting)
+      RuntimeDebugBuilder::createCPUPrinter(Builder, "\n");
     return Base;
   }
 
@@ -260,6 +292,9 @@ Value *IslExprBuilder::createAccessAddress(isl_ast_expr *Expr) {
     Value *NextIndex = create(isl_ast_expr_get_op_arg(Expr, u));
     assert(NextIndex->getType()->isIntegerTy() &&
            "Access index should be an integer");
+
+    if (PollyDebugPrinting)
+      RuntimeDebugBuilder::createCPUPrinter(Builder, "[", NextIndex, "]");
 
     if (!IndexOp) {
       IndexOp = NextIndex;
@@ -301,6 +336,8 @@ Value *IslExprBuilder::createAccessAddress(isl_ast_expr *Expr) {
 
   Access = Builder.CreateGEP(Base, IndexOp, "polly.access." + BaseName);
 
+  if (PollyDebugPrinting)
+    RuntimeDebugBuilder::createCPUPrinter(Builder, "\n");
   isl_ast_expr_free(Expr);
   return Access;
 }
@@ -388,7 +425,7 @@ Value *IslExprBuilder::createOpBin(__isl_take isl_ast_expr *Expr) {
       }
     }
     // TODO: Review code and check that this calculation does not yield
-    //       incorrect overflow in some bordercases.
+    //       incorrect overflow in some edge cases.
     //
     // floord(n,d) ((n < 0) ? (n - d + 1) : n) / d
     Value *One = ConstantInt::get(MaxType, 1);
@@ -525,7 +562,7 @@ Value *IslExprBuilder::createOpBoolean(__isl_take isl_ast_expr *Expr) {
   // 'exp & exp' or 'exp | exp'. This forces the evaluation of both branches,
   // but it is, due to the use of i1 types, otherwise equivalent. The reason
   // to go for bitwise operations is, that we assume the reduced control flow
-  // will outweight the overhead introduced by evaluating unneeded expressions.
+  // will outweigh the overhead introduced by evaluating unneeded expressions.
   // The isl code generation currently does not take advantage of the fact that
   // the expression after an '||' or '&&' is in some cases not evaluated.
   // Evaluating it anyways does not cause any undefined behaviour.

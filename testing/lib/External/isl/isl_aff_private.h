@@ -125,6 +125,9 @@ __isl_give isl_multi_aff *isl_multi_aff_align_divs(
 __isl_give isl_multi_aff *isl_multi_aff_from_basic_set_equalities(
 	__isl_take isl_basic_set *bset);
 
+__isl_give isl_multi_aff *isl_multi_aff_from_aff_mat(
+	__isl_take isl_space *space, __isl_take isl_mat *mat);
+
 __isl_give isl_pw_multi_aff *isl_pw_multi_aff_reset_domain_space(
 	__isl_take isl_pw_multi_aff *pwmaff, __isl_take isl_space *space);
 __isl_give isl_pw_multi_aff *isl_pw_multi_aff_reset_space(
@@ -136,8 +139,6 @@ __isl_give isl_pw_multi_aff *isl_pw_multi_aff_project_out(
 	__isl_take isl_pw_multi_aff *pma,
 	enum isl_dim_type type, unsigned first, unsigned n);
 
-void isl_seq_substitute(isl_int *p, int pos, isl_int *subs,
-	int p_len, int subs_len, isl_int v);
 void isl_seq_preimage(isl_int *dst, isl_int *src,
 	__isl_keep isl_multi_aff *ma, int n_before, int n_after,
 	int n_div_ma, int n_div_bmap,
@@ -153,6 +154,8 @@ isl_bool isl_pw_aff_matching_params(__isl_keep isl_pw_aff *pa,
 	__isl_keep isl_space *space);
 isl_stat isl_pw_aff_check_match_domain_space(__isl_keep isl_pw_aff *pa,
 	__isl_keep isl_space *space);
+
+__isl_give isl_basic_set *isl_aff_pos_basic_set(__isl_take isl_aff *aff);
 
 #undef BASE
 #define BASE pw_aff

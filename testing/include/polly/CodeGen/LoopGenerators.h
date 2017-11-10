@@ -31,30 +31,36 @@ using namespace llvm;
 
 /// Create a scalar do/for-style loop.
 ///
-/// @param LowerBound The starting value of the induction variable.
-/// @param UpperBound The upper bound of the induction variable.
-/// @param Stride     The value by which the induction variable is incremented.
+/// @param LowerBound         The starting value of the induction variable.
+/// @param UpperBound         The upper bound of the induction variable.
+/// @param Stride             The value by which the induction variable
+///                           is incremented.
 ///
-/// @param Builder    The builder used to create the loop.
-/// @param P          A pointer to the pass that uses this function. It is used
-///                   to update analysis information.
-/// @param LI         The loop info for the current function
-/// @param DT         The dominator tree we need to update
-/// @param ExitBlock  The block the loop will exit to.
-/// @param Predicate  The predicate used to generate the upper loop bound.
-/// @param Annotator  This function can (optionally) take a ScopAnnotator which
-///                   annotates loops and alias information in the SCoP.
-/// @param Parallel   If this loop should be marked parallel in the Annotator.
-/// @param UseGuard   Create a guard in front of the header to check if the
-///                   loop is executed at least once, otherwise just assume it.
+/// @param Builder            The builder used to create the loop.
+/// @param P                  A pointer to the pass that uses this function.
+///                           It is used to update analysis information.
+/// @param LI                 The loop info for the current function
+/// @param DT                 The dominator tree we need to update
+/// @param ExitBlock          The block the loop will exit to.
+/// @param Predicate          The predicate used to generate the upper loop
+///                           bound.
+/// @param Annotator          This function can (optionally) take
+///                           a ScopAnnotator which
+///                           annotates loops and alias information in the SCoP.
+/// @param Parallel           If this loop should be marked parallel in
+///                           the Annotator.
+/// @param UseGuard           Create a guard in front of the header to check if
+///                           the loop is executed at least once, otherwise just
+///                           assume it.
+/// @param LoopVectDisabled   If the Loop vectorizer should be disabled for this
+///                           loop.
 ///
 /// @return Value*    The newly created induction variable for this loop.
 Value *createLoop(Value *LowerBound, Value *UpperBound, Value *Stride,
-                  PollyIRBuilder &Builder, Pass *P, LoopInfo &LI,
-                  DominatorTree &DT, BasicBlock *&ExitBlock,
-                  ICmpInst::Predicate Predicate,
+                  PollyIRBuilder &Builder, LoopInfo &LI, DominatorTree &DT,
+                  BasicBlock *&ExitBlock, ICmpInst::Predicate Predicate,
                   ScopAnnotator *Annotator = NULL, bool Parallel = false,
-                  bool UseGuard = true);
+                  bool UseGuard = true, bool LoopVectDisabled = false);
 
 /// The ParallelLoopGenerator allows to create parallelized loops
 ///
@@ -99,9 +105,9 @@ Value *createLoop(Value *LowerBound, Value *UpperBound, Value *Stride,
 class ParallelLoopGenerator {
 public:
   /// Create a parallel loop generator for the current function.
-  ParallelLoopGenerator(PollyIRBuilder &Builder, Pass *P, LoopInfo &LI,
+  ParallelLoopGenerator(PollyIRBuilder &Builder, LoopInfo &LI,
                         DominatorTree &DT, const DataLayout &DL)
-      : Builder(Builder), P(P), LI(LI), DT(DT), DL(DL),
+      : Builder(Builder), LI(LI), DT(DT),
         LongType(
             Type::getIntNTy(Builder.getContext(), DL.getPointerSizeInBits())),
         M(Builder.GetInsertBlock()->getParent()->getParent()) {}
@@ -131,17 +137,11 @@ private:
   /// The IR builder we use to create instructions.
   PollyIRBuilder &Builder;
 
-  /// A pass pointer to update analysis information.
-  Pass *P;
-
   /// The loop info of the current function we need to update.
   LoopInfo &LI;
 
   /// The dominance tree of the current function we need to update.
   DominatorTree &DT;
-
-  /// The target layout to get the right size for types.
-  const DataLayout &DL;
 
   /// The type of a "long" on this hardware used for backend calls.
   Type *LongType;
@@ -179,7 +179,7 @@ public:
   /// Create a runtime library call to allow cleanup of the thread.
   ///
   /// @note This function is called right before the thread will exit the
-  ///       subfunction and only if the runtime system depends depends on it.
+  ///       subfunction and only if the runtime system depends on it.
   void createCallCleanupThread();
 
   /// Create a struct for all @p Values and store them in there.

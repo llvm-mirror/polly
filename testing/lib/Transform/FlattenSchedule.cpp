@@ -17,6 +17,7 @@
 #include "polly/FlattenAlgo.h"
 #include "polly/ScopInfo.h"
 #include "polly/ScopPass.h"
+#include "polly/Support/ISLOStream.h"
 #define DEBUG_TYPE "polly-flatten-schedule"
 
 using namespace polly;
@@ -29,8 +30,10 @@ namespace {
 /// Prints the schedule for each statements on a new line.
 void printSchedule(raw_ostream &OS, const isl::union_map &Schedule,
                    int indent) {
-  foreachElt(Schedule,
-             [&OS, indent](isl::map Map) { OS.indent(indent) << Map << "\n"; });
+  Schedule.foreach_map([&OS, indent](isl::map Map) -> isl::stat {
+    OS.indent(indent) << Map << "\n";
+    return isl::stat::ok;
+  });
 }
 
 /// Flatten the schedule stored in an polly::Scop.
@@ -57,10 +60,10 @@ public:
     IslCtx = S.getSharedIslCtx();
 
     DEBUG(dbgs() << "Going to flatten old schedule:\n");
-    OldSchedule = give(S.getSchedule());
+    OldSchedule = S.getSchedule();
     DEBUG(printSchedule(dbgs(), OldSchedule, 2));
 
-    auto Domains = give(S.getDomains());
+    auto Domains = S.getDomains();
     auto RestrictedOldSchedule = OldSchedule.intersect_domain(Domains);
     DEBUG(dbgs() << "Old schedule with domains:\n");
     DEBUG(printSchedule(dbgs(), RestrictedOldSchedule, 2));
@@ -84,7 +87,7 @@ public:
     OS << "}\n\n";
 
     OS << "Schedule after flattening {\n";
-    printSchedule(OS, give(S.getSchedule()), 4);
+    printSchedule(OS, S.getSchedule(), 4);
     OS << "}\n";
   }
 

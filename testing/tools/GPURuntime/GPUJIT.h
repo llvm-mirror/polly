@@ -13,6 +13,7 @@
 
 #ifndef GPUJIT_H_
 #define GPUJIT_H_
+#include "stddef.h"
 
 /*
  * The following demostrates how we can use the GPURuntime library to
@@ -76,22 +77,47 @@
  *
  */
 
+typedef enum PollyGPURuntimeT {
+  RUNTIME_NONE,
+  RUNTIME_CUDA,
+  RUNTIME_CL
+} PollyGPURuntime;
+
 typedef struct PollyGPUContextT PollyGPUContext;
 typedef struct PollyGPUFunctionT PollyGPUFunction;
 typedef struct PollyGPUDevicePtrT PollyGPUDevicePtr;
 
-PollyGPUContext *polly_initContext();
-PollyGPUFunction *polly_getKernel(const char *PTXBuffer,
+typedef struct OpenCLContextT OpenCLContext;
+typedef struct OpenCLKernelT OpenCLKernel;
+typedef struct OpenCLDevicePtrT OpenCLDevicePtr;
+
+typedef struct CUDAContextT CUDAContext;
+typedef struct CUDAKernelT CUDAKernel;
+typedef struct CUDADevicePtrT CUDADevicePtr;
+
+PollyGPUContext *polly_initContextCUDA();
+PollyGPUContext *polly_initContextCL();
+PollyGPUFunction *polly_getKernel(const char *BinaryBuffer,
                                   const char *KernelName);
 void polly_freeKernel(PollyGPUFunction *Kernel);
 void polly_copyFromHostToDevice(void *HostData, PollyGPUDevicePtr *DevData,
                                 long MemSize);
 void polly_copyFromDeviceToHost(PollyGPUDevicePtr *DevData, void *HostData,
                                 long MemSize);
+void polly_synchronizeDevice();
 void polly_launchKernel(PollyGPUFunction *Kernel, unsigned int GridDimX,
                         unsigned int GridDimY, unsigned int BlockSizeX,
                         unsigned int BlockSizeY, unsigned int BlockSizeZ,
                         void **Parameters);
 void polly_freeDeviceMemory(PollyGPUDevicePtr *Allocation);
 void polly_freeContext(PollyGPUContext *Context);
+
+// Note that polly_{malloc/free}Managed are currently not used by Polly.
+// We use them in COSMO by replacing all malloc with polly_mallocManaged and all
+// frees with cudaFree, so we can get managed memory "automatically".
+// Needless to say, this is a hack.
+// Please make sure that this code is not present in Polly when 2018 rolls in.
+// If this is still present, ping Siddharth Bhat <siddu.druid@gmail.com>
+void *polly_mallocManaged(size_t size);
+void polly_freeManaged(void *mem);
 #endif /* GPUJIT_H_ */

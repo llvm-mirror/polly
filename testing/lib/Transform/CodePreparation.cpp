@@ -16,6 +16,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "polly/CodePreparation.h"
 #include "polly/LinkAllPasses.h"
 #include "polly/ScopDetection.h"
 #include "polly/Support/ScopHelper.h"
@@ -57,6 +58,28 @@ public:
 };
 } // namespace
 
+PreservedAnalyses CodePreparationPass::run(Function &F,
+                                           FunctionAnalysisManager &FAM) {
+
+  // Find first non-alloca instruction. Every basic block has a non-alloca
+  // instruction, as every well formed basic block has a terminator.
+  auto &EntryBlock = F.getEntryBlock();
+  BasicBlock::iterator I = EntryBlock.begin();
+  while (isa<AllocaInst>(I))
+    ++I;
+
+  auto &DT = FAM.getResult<DominatorTreeAnalysis>(F);
+  auto &LI = FAM.getResult<LoopAnalysis>(F);
+
+  // splitBlock updates DT, LI and RI.
+  splitEntryBlockForAlloca(&EntryBlock, &DT, &LI, nullptr);
+
+  PreservedAnalyses PA;
+  PA.preserve<DominatorTreeAnalysis>();
+  PA.preserve<LoopAnalysis>();
+  return PA;
+}
+
 void CodePreparation::clear() {}
 
 CodePreparation::~CodePreparation() { clear(); }
@@ -72,12 +95,15 @@ void CodePreparation::getAnalysisUsage(AnalysisUsage &AU) const {
 }
 
 bool CodePreparation::runOnFunction(Function &F) {
+  if (skipFunction(F))
+    return false;
+
   LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
   SE = &getAnalysis<ScalarEvolutionWrapperPass>().getSE();
 
   splitEntryBlockForAlloca(&F.getEntryBlock(), this);
 
-  return false;
+  return true;
 }
 
 void CodePreparation::releaseMemory() { clear(); }

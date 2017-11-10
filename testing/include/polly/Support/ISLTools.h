@@ -157,6 +157,30 @@ isl::set shiftDim(isl::set Set, int Pos, int Amount);
 /// Piecewise shiftDim(isl::set,int,int).
 isl::union_set shiftDim(isl::union_set USet, int Pos, int Amount);
 
+/// Add a constant to one dimension of a map.
+///
+/// @param Map    The map to shift a dimension in.
+/// @param Type   A tuple of @p Map which contains the dimension to shift.
+/// @param Pos    The dimension to shift. If negative, the dimensions are
+/// counted from the end instead from the beginning. Eg. -1 is the last
+/// dimension in the tuple.
+/// @param Amount The offset to add to the specified dimension.
+///
+/// @return The modified map.
+isl::map shiftDim(isl::map Map, isl::dim Dim, int Pos, int Amount);
+
+/// Add a constant to one dimension of a each map in a union map.
+///
+/// @param UMap   The maps to shift a dimension in.
+/// @param Type   The tuple which contains the dimension to shift.
+/// @param Pos    The dimension to shift. If negative, the dimensions are
+///               counted from the ends of each map of union instead from their
+///               beginning. E.g. -1 is the last dimension of any map.
+/// @param Amount The offset to add to the specified dimension.
+///
+/// @return The union of all modified maps.
+isl::union_map shiftDim(isl::union_map UMap, isl::dim Dim, int Pos, int Amount);
+
 /// Simplify a set inplace.
 void simplify(isl::set &Set);
 
@@ -338,6 +362,167 @@ isl::union_map computeArrayUnused(isl::union_map Schedule,
 /// @return { Scatter[] }
 isl::union_set convertZoneToTimepoints(isl::union_set Zone, bool InclStart,
                                        bool InclEnd);
+
+/// Like convertZoneToTimepoints(isl::union_set,InclStart,InclEnd), but convert
+/// either the domain or the range of a map.
+isl::union_map convertZoneToTimepoints(isl::union_map Zone, isl::dim Dim,
+                                       bool InclStart, bool InclEnd);
+
+/// Overload of convertZoneToTimepoints(isl::map,InclStart,InclEnd) to process
+/// only a single map.
+isl::map convertZoneToTimepoints(isl::map Zone, isl::dim Dim, bool InclStart,
+                                 bool InclEnd);
+
+/// Distribute the domain to the tuples of a wrapped range map.
+///
+/// @param Map { Domain[] -> [Range1[] -> Range2[]] }
+///
+/// @return { [Domain[] -> Range1[]] -> [Domain[] -> Range2[]] }
+isl::map distributeDomain(isl::map Map);
+
+/// Apply distributeDomain(isl::map) to each map in the union.
+isl::union_map distributeDomain(isl::union_map UMap);
+
+/// Prepend a space to the tuples of a map.
+///
+/// @param UMap   { Domain[] -> Range[] }
+/// @param Factor { Factor[] }
+///
+/// @return { [Factor[] -> Domain[]] -> [Factor[] -> Range[]] }
+isl::union_map liftDomains(isl::union_map UMap, isl::union_set Factor);
+
+/// Apply a map to the 'middle' of another relation.
+///
+/// @param UMap { [DomainDomain[] -> DomainRange[]] -> Range[] }
+/// @param Func { DomainRange[] -> NewDomainRange[] }
+///
+/// @return { [DomainDomain[] -> NewDomainRange[]] -> Range[] }
+isl::union_map applyDomainRange(isl::union_map UMap, isl::union_map Func);
+
+/// Intersect the range of @p Map with @p Range.
+///
+/// Since @p Map is an isl::map, the result will be a single space, even though
+/// @p Range is an isl::union_set. This is the only difference to
+/// isl::map::intersect_range and isl::union_map::interset_range.
+///
+/// @param Map   { Domain[] -> Range[] }
+/// @param Range { Range[] }
+///
+/// @return { Domain[] -> Range[] }
+isl::map intersectRange(isl::map Map, isl::union_set Range);
+
+/// If @p PwAff maps to a constant, return said constant. If @p Max/@p Min, it
+/// can also be a piecewise constant and it would return the minimum/maximum
+/// value. Otherwise, return NaN.
+isl::val getConstant(isl::pw_aff PwAff, bool Max, bool Min);
+
+/// Dump a description of the argument to llvm::errs().
+///
+/// In contrast to isl's dump function, there are a few differences:
+/// - Each polyhedron (pieces) is written on its own line.
+/// - Spaces are sorted by structure. E.g. maps with same domain space are
+///   grouped. Isl sorts them according to the space's hash function.
+/// - Pieces of the same space are sorted using their lower bound.
+/// - A more compact to_str representation is used instead of Isl's dump
+///   functions that try to show the internal representation.
+///
+/// The goal is to get a better understandable representation that is also
+/// useful to compare two sets. As all dump() functions, its intended use is to
+/// be called in a debugger only.
+///
+/// isl_map_dump example:
+/// [p_0, p_1, p_2] -> { Stmt0[i0] -> [o0, o1] : (o0 = i0 and o1 = 0 and i0 > 0
+/// and i0 <= 5 - p_2) or (i0 = 0 and o0 = 0 and o1 = 0); Stmt3[i0] -> [o0, o1]
+/// : (o0 = i0 and o1 = 3 and i0 > 0 and i0 <= 5 - p_2) or (i0 = 0 and o0 = 0
+/// and o1 = 3); Stmt2[i0] -> [o0, o1] : (o0 = i0 and o1 = 1 and i0 >= 3 + p_0 -
+/// p_1 and i0 > 0 and i0 <= 5 - p_2) or (o0 = i0 and o1 = 1 and i0 > 0 and i0
+/// <= 5 - p_2 and i0 < p_0 - p_1) or (i0 = 0 and o0 = 0 and o1 = 1 and p_1 >= 3
+/// + p_0) or (i0 = 0 and o0 = 0 and o1 = 1 and p_1 < p_0) or (p_0 = 0 and i0 =
+/// 2 - p_1 and o0 = 2 - p_1 and o1 = 1 and p_2 <= 3 + p_1 and p_1 <= 1) or (p_1
+/// = 1 + p_0 and i0 = 0 and o0 = 0 and o1 = 1) or (p_0 = 0 and p_1 = 2 and i0 =
+/// 0 and o0 = 0 and o1 = 1) or (p_0 = -1 and p_1 = -1 and i0 = 0 and o0 = 0 and
+/// o1 = 1); Stmt1[i0] -> [o0, o1] : (p_0 = -1 and i0 = 1 - p_1 and o0 = 1 - p_1
+/// and o1 = 2 and p_2 <= 4 + p_1 and p_1 <= 0) or (p_0 = 0 and i0 = -p_1 and o0
+/// = -p_1 and o1 = 2 and p_2 <= 5 + p_1 and p_1 < 0) or (p_0 = -1 and p_1 = 1
+/// and i0 = 0 and o0 = 0 and o1 = 2) or (p_0 = 0 and p_1 = 0 and i0 = 0 and o0
+/// = 0 and o1 = 2) }
+///
+/// dumpPw example (same set):
+/// [p_0, p_1, p_2] -> {
+///   Stmt0[0] -> [0, 0];
+///   Stmt0[i0] -> [i0, 0] : 0 < i0 <= 5 - p_2;
+///   Stmt1[0] -> [0, 2] : p_1 = 1 and p_0 = -1;
+///   Stmt1[0] -> [0, 2] : p_1 = 0 and p_0 = 0;
+///   Stmt1[1 - p_1] -> [1 - p_1, 2] : p_0 = -1 and p_1 <= 0 and p_2 <= 4 + p_1;
+///   Stmt1[-p_1] -> [-p_1, 2] : p_0 = 0 and p_1 < 0 and p_2 <= 5 + p_1;
+///   Stmt2[0] -> [0, 1] : p_1 >= 3 + p_0;
+///   Stmt2[0] -> [0, 1] : p_1 < p_0;
+///   Stmt2[0] -> [0, 1] : p_1 = 1 + p_0;
+///   Stmt2[0] -> [0, 1] : p_1 = 2 and p_0 = 0;
+///   Stmt2[0] -> [0, 1] : p_1 = -1 and p_0 = -1;
+///   Stmt2[i0] -> [i0, 1] : i0 >= 3 + p_0 - p_1 and 0 < i0 <= 5 - p_2;
+///   Stmt2[i0] -> [i0, 1] : 0 < i0 <= 5 - p_2 and i0 < p_0 - p_1;
+///   Stmt2[2 - p_1] -> [2 - p_1, 1] : p_0 = 0 and p_1 <= 1 and p_2 <= 3 + p_1;
+///   Stmt3[0] -> [0, 3];
+///   Stmt3[i0] -> [i0, 3] : 0 < i0 <= 5 - p_2
+/// }
+/// @{
+void dumpPw(const isl::set &Set);
+void dumpPw(const isl::map &Map);
+void dumpPw(const isl::union_set &USet);
+void dumpPw(const isl::union_map &UMap);
+void dumpPw(__isl_keep isl_set *Set);
+void dumpPw(__isl_keep isl_map *Map);
+void dumpPw(__isl_keep isl_union_set *USet);
+void dumpPw(__isl_keep isl_union_map *UMap);
+/// @}
+
+/// Dump all points of the argument to llvm::errs().
+///
+/// Before being printed by dumpPw(), the argument's pieces are expanded to
+/// contain only single points. If a dimension is unbounded, it keeps its
+/// representation.
+///
+/// This is useful for debugging reduced cases where parameters are set to
+/// constants to keep the example simple. Such sets can still contain
+/// existential dimensions which makes the polyhedral hard to compare.
+///
+/// Example:
+///   { [MemRef_A[i0] -> [i1]] : (exists (e0 = floor((1 + i1)/3): i0 = 1 and 3e0
+///   <= i1 and 3e0 >= -1 + i1 and i1 >= 15 and i1 <= 25)) or (exists (e0 =
+///   floor((i1)/3): i0 = 0 and 3e0 < i1 and 3e0 >= -2 + i1 and i1 > 0 and i1 <=
+///   11)) }
+///
+/// dumpExpanded:
+/// {
+///   [MemRef_A[0] ->[1]];
+///   [MemRef_A[0] ->[2]];
+///   [MemRef_A[0] ->[4]];
+///   [MemRef_A[0] ->[5]];
+///   [MemRef_A[0] ->[7]];
+///   [MemRef_A[0] ->[8]];
+///   [MemRef_A[0] ->[10]];
+///   [MemRef_A[0] ->[11]];
+///   [MemRef_A[1] ->[15]];
+///   [MemRef_A[1] ->[16]];
+///   [MemRef_A[1] ->[18]];
+///   [MemRef_A[1] ->[19]];
+///   [MemRef_A[1] ->[21]];
+///   [MemRef_A[1] ->[22]];
+///   [MemRef_A[1] ->[24]];
+///   [MemRef_A[1] ->[25]]
+/// }
+/// @{
+void dumpExpanded(const isl::set &Set);
+void dumpExpanded(const isl::map &Map);
+void dumpExpanded(const isl::union_set &USet);
+void dumpExpanded(const isl::union_map &UMap);
+void dumpExpanded(__isl_keep isl_set *Set);
+void dumpExpanded(__isl_keep isl_map *Map);
+void dumpExpanded(__isl_keep isl_union_set *USet);
+void dumpExpanded(__isl_keep isl_union_map *UMap);
+/// @}
+
 } // namespace polly
 
 #endif /* POLLY_ISLTOOLS_H */

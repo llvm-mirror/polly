@@ -25,7 +25,20 @@ AX_CC_MAXOPT
 AX_GCC_WARN_UNUSED_RESULT
 AX_C___ATTRIBUTE__
 
+# CXX11FLAGS contains the flags (if any) added by AX_CXX_COMPILE_STDCXX_11
+# Original state of CXX and CXXCPP is preserved because CXX11FLAGS
+# is only needed for compiling interface/isl_test_cpp
+AC_SUBST(CXX11FLAGS)
+ac_save_CXX="$CXX"
+ac_save_CXXCPP="$CXXCPP"
+AX_CXX_COMPILE_STDCXX_11([noext], [optional])
+CXX11FLAGS=${CXX#$ac_save_CXX}
+CXX="$ac_save_CXX"
+CXXCPP="$ac_save_CXXCPP"
+
+AC_PROG_GREP
 AC_PROG_LIBTOOL
+AC_PROG_SED
 
 AC_CHECK_PROG(PERL, perl, perl, [])
 AC_CHECK_PROG(PDFLATEX, pdflatex, pdflatex, [])
@@ -66,6 +79,7 @@ fi
 AM_CONDITIONAL(IMATH_FOR_MP, test x$with_int = ximath -o x$with_int = ximath-32)
 AM_CONDITIONAL(GMP_FOR_MP, test x$with_int = xgmp)
 
+AM_CONDITIONAL(HAVE_CXX11, test "x$HAVE_CXX11" = "x1")
 AM_CONDITIONAL(SMALL_INT_OPT, test "x$with_int" == "ximath-32")
 AS_IF([test "x$with_int" == "ximath-32"], [
 	AC_DEFINE([USE_SMALL_INT_OPT], [], [Use small integer optimization])
@@ -125,6 +139,8 @@ fi
 AC_CONFIG_FILES([bound_test.sh], [chmod +x bound_test.sh])
 AC_CONFIG_FILES([codegen_test.sh], [chmod +x codegen_test.sh])
 AC_CONFIG_FILES([pip_test.sh], [chmod +x pip_test.sh])
+AC_CONFIG_FILES([flow_test.sh], [chmod +x flow_test.sh])
+AC_CONFIG_FILES([schedule_test.sh], [chmod +x schedule_test.sh])
 AC_CONFIG_COMMANDS_POST([
 	dnl pass on arguments to subdir configures, but don't
 	dnl add them to config.status

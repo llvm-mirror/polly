@@ -1,9 +1,4 @@
 # Keep this in sync with llvm/cmake/CMakeLists.txt!
-if (LLVM_INSTALL_ROOT)
-  # this simplifies things down the road, by not requiring to distinguish
-  # between in-tree and out of tree builds
-  set(LLVM_BINARY_DIR ${LLVM_INSTALL_ROOT})
-endif()
 
 set(LLVM_INSTALL_PACKAGE_DIR "lib${LLVM_LIBDIR_SUFFIX}/cmake/llvm")
 set(POLLY_INSTALL_PACKAGE_DIR "lib${LLVM_LIBDIR_SUFFIX}/cmake/polly")
@@ -52,7 +47,11 @@ endif()
 
 # Generate PollyConfig.cmake for the build tree.
 set(POLLY_CONFIG_CMAKE_DIR "${CMAKE_BINARY_DIR}/${POLLY_INSTALL_PACKAGE_DIR}")
-set(POLLY_CONFIG_INCLUDE_DIRS ${ISL_INCLUDE_DIRS})
+set(POLLY_CONFIG_INCLUDE_DIRS
+  ${POLLY_SOURCE_DIR}/include
+  ${ISL_INCLUDE_DIRS}
+  ${POLLY_BINARY_DIR}/include
+  )
 set(POLLY_CONFIG_LIBRARY_DIRS "${POLLY_BINARY_DIR}/lib")
 
 # set locations for imported targets
@@ -85,9 +84,15 @@ set(POLLY_CONFIG_LLVM_CMAKE_DIR "${LLVM_BINARY_DIR}/${LLVM_INSTALL_PACKAGE_DIR}"
 set(POLLY_CONFIG_CMAKE_DIR "${POLLY_INSTALL_PREFIX}/${POLLY_INSTALL_PACKAGE_DIR}")
 set(POLLY_CONFIG_LIBRARY_DIRS "${POLLY_INSTALL_PREFIX}/lib${LLVM_LIBDIR_SUFFIX}")
 if (POLLY_BUNDLED_ISL)
-  set(POLLY_CONFIG_INCLUDE_DIRS "${POLLY_INSTALL_PREFIX}/include/polly")
+  set(POLLY_CONFIG_INCLUDE_DIRS
+    "${POLLY_INSTALL_PREFIX}/include"
+    "${POLLY_INSTALL_PREFIX}/include/polly"
+    )
 else()
-  set(POLLY_CONFIG_INCLUDE_DIRS ${ISL_INCLUDE_DIRS})
+  set(POLLY_CONFIG_INCLUDE_DIRS
+    "${POLLY_INSTALL_PREFIX}/include"
+    ${ISL_INCLUDE_DIRS}
+    )
 endif()
 
 # set locations for imported targets. The path is constructed to be relative to
@@ -106,7 +111,7 @@ foreach(tgt IN LISTS POLLY_CONFIG_EXPORTED_TARGETS)
   if (NOT tgt_type STREQUAL "INTERFACE_LIBRARY")
     set(POLLY_EXPORTS
 "set_target_properties(${tgt} PROPERTIES
-        IMPORTED_LOCATION_$<UPPER_CASE:$<CONFIG>> \${CMAKE_CURRENT_LIST_DIR}/${tgt_path})
+        IMPORTED_LOCATION$<$<NOT:$<CONFIG:>>:_<UPPER_CASE:$<CONFIG>> \${CMAKE_CURRENT_LIST_DIR}/${tgt_path})
 ${POLLY_EXPORTS}")
   endif()
 endforeach(tgt)

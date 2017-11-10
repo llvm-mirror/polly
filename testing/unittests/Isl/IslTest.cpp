@@ -299,36 +299,40 @@ TEST(Isl, Foreach) {
 
   {
     auto NumBMaps = 0;
-    foreachElt(TestMap, [&](isl::basic_map BMap) {
+    TestMap.foreach_basic_map([&](isl::basic_map BMap) -> isl::stat {
       EXPECT_EQ(BMap, TestBMap);
       NumBMaps++;
+      return isl::stat::ok;
     });
     EXPECT_EQ(1, NumBMaps);
   }
 
   {
     auto NumBSets = 0;
-    foreachElt(TestSet, [&](isl::basic_set BSet) {
+    TestSet.foreach_basic_set([&](isl::basic_set BSet) -> isl::stat {
       EXPECT_EQ(BSet, TestBSet);
       NumBSets++;
+      return isl::stat::ok;
     });
     EXPECT_EQ(1, NumBSets);
   }
 
   {
     auto NumMaps = 0;
-    foreachElt(TestUMap, [&](isl::map Map) {
+    TestUMap.foreach_map([&](isl::map Map) -> isl::stat {
       EXPECT_EQ(Map, TestMap);
       NumMaps++;
+      return isl::stat::ok;
     });
     EXPECT_EQ(1, NumMaps);
   }
 
   {
     auto NumSets = 0;
-    foreachElt(TestUSet, [&](isl::set Set) {
+    TestUSet.foreach_set([&](isl::set Set) -> isl::stat {
       EXPECT_EQ(Set, TestSet);
       NumSets++;
+      return isl::stat::ok;
     });
     EXPECT_EQ(1, NumSets);
   }
@@ -336,32 +340,32 @@ TEST(Isl, Foreach) {
   {
     auto UPwAff = isl::union_pw_aff(TestUSet, isl::val::zero(Ctx.get()));
     auto NumPwAffs = 0;
-    foreachElt(UPwAff, [&](isl::pw_aff PwAff) {
+    UPwAff.foreach_pw_aff([&](isl::pw_aff PwAff) -> isl::stat {
       EXPECT_TRUE(PwAff.is_cst());
       NumPwAffs++;
+      return isl::stat::ok;
     });
     EXPECT_EQ(1, NumPwAffs);
   }
 
   {
     auto NumBMaps = 0;
-    EXPECT_EQ(
-        isl_stat_error,
-        foreachEltWithBreak(TestMap, [&](isl::basic_map BMap) -> isl_stat {
-          EXPECT_EQ(BMap, TestBMap);
-          NumBMaps++;
-          return isl_stat_error;
-        }));
+    EXPECT_EQ(isl::stat::error,
+              TestMap.foreach_basic_map([&](isl::basic_map BMap) -> isl::stat {
+                EXPECT_EQ(BMap, TestBMap);
+                NumBMaps++;
+                return isl::stat::error;
+              }));
     EXPECT_EQ(1, NumBMaps);
   }
 
   {
     auto NumMaps = 0;
-    EXPECT_EQ(isl_stat_error,
-              foreachEltWithBreak(TestUMap, [&](isl::map Map) -> isl_stat {
+    EXPECT_EQ(isl::stat::error,
+              TestUMap.foreach_map([&](isl::map Map) -> isl::stat {
                 EXPECT_EQ(Map, TestMap);
                 NumMaps++;
-                return isl_stat_error;
+                return isl::stat::error;
               }));
     EXPECT_EQ(1, NumMaps);
   }
@@ -369,13 +373,12 @@ TEST(Isl, Foreach) {
   {
     auto TestPwAff = isl::pw_aff(TestSet, isl::val::zero(Ctx.get()));
     auto NumPieces = 0;
-    foreachPieceWithBreak(TestPwAff,
-                          [&](isl::set Domain, isl::aff Aff) -> isl_stat {
-                            EXPECT_EQ(Domain, TestSet);
-                            EXPECT_TRUE(Aff.is_cst());
-                            NumPieces++;
-                            return isl_stat_error;
-                          });
+    TestPwAff.foreach_piece([&](isl::set Domain, isl::aff Aff) -> isl::stat {
+      EXPECT_EQ(Domain, TestSet);
+      EXPECT_TRUE(Aff.is_cst());
+      NumPieces++;
+      return isl::stat::error;
+    });
     EXPECT_EQ(1, NumPieces);
   }
 }
@@ -615,6 +618,16 @@ TEST(ISLTools, shiftDim) {
 
   // Parametrized
   EXPECT_EQ(USET("[n] -> { [n+1] }"), shiftDim(USET("[n] -> { [n] }"), 0, 1));
+
+  // Union maps
+  EXPECT_EQ(MAP("{ [1] -> [] }"),
+            shiftDim(MAP("{ [0] -> [] }"), isl::dim::in, 0, 1));
+  EXPECT_EQ(UMAP("{ [1] -> [] }"),
+            shiftDim(UMAP("{ [0] -> [] }"), isl::dim::in, 0, 1));
+  EXPECT_EQ(MAP("{ [] -> [1] }"),
+            shiftDim(MAP("{ [] -> [0] }"), isl::dim::out, 0, 1));
+  EXPECT_EQ(UMAP("{ [] -> [1] }"),
+            shiftDim(UMAP("{ [] -> [0] }"), isl::dim::out, 0, 1));
 }
 
 TEST(DeLICM, computeReachingWrite) {
@@ -770,6 +783,63 @@ TEST(DeLICM, computeArrayUnused) {
               computeArrayUnused(UMAP("{ Write[] -> [0] }"),
                                  UMAP("{ Write[] -> Elt[] }"), UMAP("{}"),
                                  ReadEltInSameInst, false, true));
+
+    // Two writes
+    EXPECT_EQ(
+        UMAP("{ Elt[] -> [i] : i <= 10 }"),
+        computeArrayUnused(UMAP("{ WriteA[] -> [0];  WriteB[] -> [10] }"),
+                           UMAP("{ WriteA[] -> Elt[]; WriteB[] -> Elt[] }"),
+                           UMAP("{}"), ReadEltInSameInst, false, true));
+
+    // Two unused zones
+    // read,write,read,write
+    EXPECT_EQ(
+        UMAP("{ Elt[] -> [i] : 0 < i <= 10; Elt[] -> [i] : 20 < i <= 30 }"),
+        computeArrayUnused(UMAP("{ ReadA[] -> [0]; WriteA[] -> [10]; ReadB[] "
+                                "-> [20]; WriteB[] -> [30] }"),
+                           UMAP("{ WriteA[] -> Elt[]; WriteB[] -> Elt[] }"),
+                           UMAP("{ ReadA[] -> Elt[];  ReadB[] -> Elt[] }"),
+                           ReadEltInSameInst, false, true));
+
+    // write, write
+    EXPECT_EQ(
+        UMAP("{ Elt[] -> [i] : i <= 10 }"),
+        computeArrayUnused(
+            UMAP("{ WriteA[] -> [0];  WriteB[] -> [10];  Read[] -> [20] }"),
+            UMAP("{ WriteA[] -> Elt[]; WriteB[] -> Elt[] }"),
+            UMAP("{ Read[] -> Elt[] }"), ReadEltInSameInst, false, true));
+
+    // write, read
+    EXPECT_EQ(UMAP("{ Elt[] -> [i] : i <= 0 }"),
+              computeArrayUnused(UMAP("{ Write[] -> [0]; Read[] -> [10] }"),
+                                 UMAP("{ Write[] -> Elt[] }"),
+                                 UMAP("{ Read[] -> Elt[] }"), ReadEltInSameInst,
+                                 false, true));
+
+    // read, write, read
+    EXPECT_EQ(UMAP("{ Elt[] -> [i] : 0 < i <= 10 }"),
+              computeArrayUnused(
+                  UMAP("{ ReadA[] -> [0]; Write[] -> [10]; ReadB[] -> [20] }"),
+                  UMAP("{ Write[] -> Elt[] }"),
+                  UMAP("{ ReadA[] -> Elt[];  ReadB[] -> Elt[] }"),
+                  ReadEltInSameInst, false, true));
+
+    // read, write, write
+    EXPECT_EQ(
+        UMAP("{ Elt[] -> [i] : 0 < i <= 20 }"),
+        computeArrayUnused(
+            UMAP("{ Read[] -> [0]; WriteA[] -> [10];  WriteB[] -> [20] }"),
+            UMAP("{ WriteA[] -> Elt[]; WriteB[] -> Elt[] }"),
+            UMAP("{ Read[] -> Elt[] }"), ReadEltInSameInst, false, true));
+
+    // read, write, write, read
+    EXPECT_EQ(
+        UMAP("{ Elt[] -> [i] : 0 < i <= 20 }"),
+        computeArrayUnused(UMAP("{ ReadA[] -> [0]; WriteA[] -> [10];  WriteB[] "
+                                "-> [20]; ReadB[] -> [30] }"),
+                           UMAP("{ WriteA[] -> Elt[]; WriteB[] -> Elt[] }"),
+                           UMAP("{ ReadA[] -> Elt[];  ReadB[] -> Elt[] }"),
+                           ReadEltInSameInst, false, true));
   }
 
   // Read and write in same statement
@@ -838,6 +908,99 @@ TEST(DeLICM, convertZoneToTimepoints) {
             convertZoneToTimepoints(USET("{ [0,1] }"), false, true));
   EXPECT_EQ(USET("{ [0,0]; [0,1] }"),
             convertZoneToTimepoints(USET("{ [0,1] }"), true, true));
+
+  // Map domains
+  EXPECT_EQ(UMAP("{}"), convertZoneToTimepoints(UMAP("{ [1] -> [] }"),
+                                                isl::dim::in, false, false));
+  EXPECT_EQ(UMAP("{ [0] -> [] }"),
+            convertZoneToTimepoints(UMAP("{ [1] -> [] }"), isl::dim::in, true,
+                                    false));
+  EXPECT_EQ(UMAP("{ [1] -> [] }"),
+            convertZoneToTimepoints(UMAP("{ [1] -> [] }"), isl::dim::in, false,
+                                    true));
+  EXPECT_EQ(
+      UMAP("{ [0] -> []; [1] -> [] }"),
+      convertZoneToTimepoints(UMAP("{ [1] -> [] }"), isl::dim::in, true, true));
+
+  // Map ranges
+  EXPECT_EQ(UMAP("{}"), convertZoneToTimepoints(UMAP("{ [] -> [1] }"),
+                                                isl::dim::out, false, false));
+  EXPECT_EQ(UMAP("{ [] -> [0] }"),
+            convertZoneToTimepoints(UMAP("{ [] -> [1] }"), isl::dim::out, true,
+                                    false));
+  EXPECT_EQ(UMAP("{ [] -> [1] }"),
+            convertZoneToTimepoints(UMAP("{ [] -> [1] }"), isl::dim::out, false,
+                                    true));
+  EXPECT_EQ(UMAP("{ [] -> [0]; [] -> [1] }"),
+            convertZoneToTimepoints(UMAP("{ [] -> [1] }"), isl::dim::out, true,
+                                    true));
+}
+
+TEST(DeLICM, distribute) {
+  std::unique_ptr<isl_ctx, decltype(&isl_ctx_free)> Ctx(isl_ctx_alloc(),
+                                                        &isl_ctx_free);
+
+  // Basic usage
+  EXPECT_EQ(MAP("{ [Domain[] -> Range1[]] -> [Domain[] -> Range2[]] }"),
+            distributeDomain(MAP("{ Domain[] -> [Range1[] -> Range2[]] }")));
+  EXPECT_EQ(
+      MAP("{ [Domain[i,j] -> Range1[i,k]] -> [Domain[i,j] -> Range2[j,k]] }"),
+      distributeDomain(MAP("{ Domain[i,j] -> [Range1[i,k] -> Range2[j,k]] }")));
+
+  // Union maps
+  EXPECT_EQ(
+      UMAP(
+          "{ [DomainA[i,j] -> RangeA1[i,k]] -> [DomainA[i,j] -> RangeA2[j,k]];"
+          "[DomainB[i,j] -> RangeB1[i,k]] -> [DomainB[i,j] -> RangeB2[j,k]] }"),
+      distributeDomain(
+          UMAP("{ DomainA[i,j] -> [RangeA1[i,k] -> RangeA2[j,k]];"
+               "DomainB[i,j] -> [RangeB1[i,k] -> RangeB2[j,k]] }")));
+}
+
+TEST(DeLICM, lift) {
+  std::unique_ptr<isl_ctx, decltype(&isl_ctx_free)> Ctx(isl_ctx_alloc(),
+                                                        &isl_ctx_free);
+
+  // Basic usage
+  EXPECT_EQ(UMAP("{ [Factor[] -> Domain[]] -> [Factor[] -> Range[]] }"),
+            liftDomains(UMAP("{ Domain[] -> Range[] }"), USET("{ Factor[] }")));
+  EXPECT_EQ(UMAP("{ [Factor[l] -> Domain[i,k]] -> [Factor[l] -> Range[j,k]] }"),
+            liftDomains(UMAP("{ Domain[i,k] -> Range[j,k] }"),
+                        USET("{ Factor[l] }")));
+
+  // Multiple maps in union
+  EXPECT_EQ(
+      UMAP("{ [FactorA[] -> DomainA[]] -> [FactorA[] -> RangeA[]];"
+           "[FactorB[] -> DomainA[]] -> [FactorB[] -> RangeA[]];"
+           "[FactorA[] -> DomainB[]] -> [FactorA[] -> RangeB[]];"
+           "[FactorB[] -> DomainB[]] -> [FactorB[] -> RangeB[]] }"),
+      liftDomains(UMAP("{ DomainA[] -> RangeA[]; DomainB[] -> RangeB[] }"),
+                  USET("{ FactorA[]; FactorB[] }")));
+}
+
+TEST(DeLICM, apply) {
+  std::unique_ptr<isl_ctx, decltype(&isl_ctx_free)> Ctx(isl_ctx_alloc(),
+                                                        &isl_ctx_free);
+
+  // Basic usage
+  EXPECT_EQ(
+      UMAP("{ [DomainDomain[] -> NewDomainRange[]] -> Range[] }"),
+      applyDomainRange(UMAP("{ [DomainDomain[] -> DomainRange[]] -> Range[] }"),
+                       UMAP("{ DomainRange[] -> NewDomainRange[] }")));
+  EXPECT_EQ(
+      UMAP("{ [DomainDomain[i,k] -> NewDomainRange[j,k,l]] -> Range[i,j] }"),
+      applyDomainRange(
+          UMAP("{ [DomainDomain[i,k] -> DomainRange[j,k]] -> Range[i,j] }"),
+          UMAP("{ DomainRange[j,k] -> NewDomainRange[j,k,l] }")));
+
+  // Multiple maps in union
+  EXPECT_EQ(UMAP("{ [DomainDomainA[] -> NewDomainRangeA[]] -> RangeA[];"
+                 "[DomainDomainB[] -> NewDomainRangeB[]] -> RangeB[] }"),
+            applyDomainRange(
+                UMAP("{ [DomainDomainA[] -> DomainRangeA[]] -> RangeA[];"
+                     "[DomainDomainB[] -> DomainRangeB[]] -> RangeB[] }"),
+                UMAP("{ DomainRangeA[] -> NewDomainRangeA[];"
+                     "DomainRangeB[] -> NewDomainRangeB[] }")));
 }
 
 } // anonymous namespace

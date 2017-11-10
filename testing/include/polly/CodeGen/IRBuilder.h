@@ -15,7 +15,9 @@
 #ifndef POLLY_CODEGEN_IRBUILDER_H
 #define POLLY_CODEGEN_IRBUILDER_H
 
+#include "llvm/ADT/MapVector.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/ValueMap.h"
 
@@ -57,8 +59,8 @@ public:
   void annotate(llvm::Instruction *I);
 
   /// Annotate the loop latch @p B wrt. @p L.
-  void annotateLoopLatch(llvm::BranchInst *B, llvm::Loop *L,
-                         bool IsParallel) const;
+  void annotateLoopLatch(llvm::BranchInst *B, llvm::Loop *L, bool IsParallel,
+                         bool IsLoopVectorizerDisabled) const;
 
   /// Add alternative alias based pointers
   ///
@@ -80,7 +82,20 @@ public:
   /// Delete the set of alternative alias bases
   void resetAlternativeAliasBases() { AlternativeAliasBases.clear(); }
 
+  /// Add inter iteration alias-free base pointer @p BasePtr.
+  void addInterIterationAliasFreeBasePtr(llvm::Value *BasePtr);
+
 private:
+  /// Annotate with the second level alias metadata
+  ///
+  /// Annotate the instruction @p I with the second level alias metadata
+  /// to distinguish the individual non-aliasing accesses that have inter
+  /// iteration alias-free base pointers.
+  ///
+  /// @param I The instruction to be annotated.
+  /// @param BasePtr The base pointer of @p I.
+  void annotateSecondLevel(llvm::Instruction *I, llvm::Value *BasePtr);
+
   /// The ScalarEvolution analysis we use to find base pointers.
   llvm::ScalarEvolution *SE;
 
@@ -94,11 +109,21 @@ private:
   llvm::MDNode *AliasScopeDomain;
 
   /// A map from base pointers to its alias scope.
-  llvm::DenseMap<llvm::AssertingVH<llvm::Value>, llvm::MDNode *> AliasScopeMap;
+  llvm::MapVector<llvm::AssertingVH<llvm::Value>, llvm::MDNode *> AliasScopeMap;
 
   /// A map from base pointers to an alias scope list of other pointers.
   llvm::DenseMap<llvm::AssertingVH<llvm::Value>, llvm::MDNode *>
       OtherAliasScopeListMap;
+
+  /// A map from pointers to second level alias scopes.
+  llvm::DenseMap<const llvm::SCEV *, llvm::MDNode *> SecondLevelAliasScopeMap;
+
+  /// A map from pointers to second level alias scope list of other pointers.
+  llvm::DenseMap<const llvm::SCEV *, llvm::MDNode *>
+      SecondLevelOtherAliasScopeListMap;
+
+  /// Inter iteration alias-free base pointers.
+  llvm::SmallPtrSet<llvm::Value *, 4> InterIterationAliasFreeBasePtrs;
 
   llvm::DenseMap<llvm::AssertingVH<llvm::Value>, llvm::AssertingVH<llvm::Value>>
       AlternativeAliasBases;
