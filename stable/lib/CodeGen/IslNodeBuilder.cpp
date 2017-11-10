@@ -263,7 +263,7 @@ isl_stat addReferencesFromStmt(const ScopStmt *Stmt, void *UserPtr,
     }
 
     if (Access->isLatestArrayKind()) {
-      auto *BasePtr = Access->getScopArrayInfo()->getBasePtr();
+      auto *BasePtr = Access->getLatestScopArrayInfo()->getBasePtr();
       if (Instruction *OpInst = dyn_cast<Instruction>(BasePtr))
         if (Stmt->getParent()->contains(OpInst))
           continue;
@@ -530,7 +530,7 @@ static bool IsLoopVectorizerDisabled(isl::ast_node Node) {
 }
 
 void IslNodeBuilder::createForSequential(__isl_take isl_ast_node *For,
-                                         bool KnownParallel) {
+                                         bool MarkParallel) {
   isl_ast_node *Body;
   isl_ast_expr *Init, *Inc, *Iterator, *UB;
   isl_id *IteratorID;
@@ -539,10 +539,6 @@ void IslNodeBuilder::createForSequential(__isl_take isl_ast_node *For,
   BasicBlock *ExitBlock;
   Value *IV;
   CmpInst::Predicate Predicate;
-  bool Parallel;
-
-  Parallel = KnownParallel || (IslAstInfo::isParallel(For) &&
-                               !IslAstInfo::isReductionParallel(For));
 
   bool LoopVectorizerDisabled =
       IsLoopVectorizerDisabled(isl::manage(isl_ast_node_copy(For)));
@@ -582,13 +578,13 @@ void IslNodeBuilder::createForSequential(__isl_take isl_ast_node *For,
   bool UseGuardBB =
       !SE.isKnownPredicate(Predicate, SE.getSCEV(ValueLB), SE.getSCEV(ValueUB));
   IV = createLoop(ValueLB, ValueUB, ValueInc, Builder, LI, DT, ExitBlock,
-                  Predicate, &Annotator, Parallel, UseGuardBB,
+                  Predicate, &Annotator, MarkParallel, UseGuardBB,
                   LoopVectorizerDisabled);
   IDToValue[IteratorID] = IV;
 
   create(Body);
 
-  Annotator.popLoop(Parallel);
+  Annotator.popLoop(MarkParallel);
 
   IDToValue.erase(IDToValue.find(IteratorID));
 
@@ -795,7 +791,9 @@ void IslNodeBuilder::createFor(__isl_take isl_ast_node *For) {
     createForParallel(For);
     return;
   }
-  createForSequential(For, false);
+  bool Parallel =
+      (IslAstInfo::isParallel(For) && !IslAstInfo::isReductionParallel(For));
+  createForSequential(For, Parallel);
 }
 
 void IslNodeBuilder::createIf(__isl_take isl_ast_node *If) {

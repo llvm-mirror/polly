@@ -51,6 +51,11 @@ static cl::opt<bool>
                  cl::desc("Analyze array contents for load forwarding"),
                  cl::cat(PollyCategory), cl::init(true), cl::Hidden);
 
+static cl::opt<bool>
+    NormalizePHIs("polly-optree-normalize-phi",
+                  cl::desc("Replace PHIs by their incoming values"),
+                  cl::cat(PollyCategory), cl::init(false), cl::Hidden);
+
 static cl::opt<unsigned>
     MaxOps("polly-optree-max-ops",
            cl::desc("Maximum number of ISL operations to invest for known "
@@ -64,6 +69,7 @@ STATISTIC(KnownOutOfQuota,
 STATISTIC(TotalInstructionsCopied, "Number of copied instructions");
 STATISTIC(TotalKnownLoadsForwarded,
           "Number of forwarded loads because their value was known");
+STATISTIC(TotalReloads, "Number of reloaded values");
 STATISTIC(TotalReadOnlyCopied, "Number of copied read-only accesses");
 STATISTIC(TotalForwardedTrees, "Number of forwarded operand trees");
 STATISTIC(TotalModifiedStmts,
@@ -106,12 +112,21 @@ enum ForwardingDecision {
   /// and can be used anywhere) into the same statement as %add would.
   FD_CanForwardLeaf,
 
-  /// The root instruction can be forwarded in a non-trivial way. This requires
-  /// the operand tree root to be an instruction in some statement.
-  FD_CanForwardTree,
+  /// The root instruction can be forwarded and doing so avoids a scalar
+  /// dependency.
+  ///
+  /// This can be either because the operand tree can be moved to the target
+  /// statement, or a memory access is redirected to read from a different
+  /// location.
+  FD_CanForwardProfitably,
 
-  /// Used to indicate that a forwarding has be carried out successfully.
-  FD_DidForward,
+  /// Used to indicate that a forwarding has be carried out successfully, and
+  /// the forwarded memory access can be deleted.
+  FD_DidForwardTree,
+
+  /// Used to indicate that a forwarding has be carried out successfully, and
+  /// the forwarded memory access is being reused.
+  FD_DidForwardLeaf,
 
   /// A forwarding method cannot be applied to the operand tree.
   /// The difference to FD_CannotForward is that there might be other methods
@@ -139,6 +154,9 @@ private:
 
   /// Number of loads forwarded because their value was known.
   int NumKnownLoadsForwarded = 0;
+
+  /// Number of values reloaded from known array elements.
+  int NumReloads = 0;
 
   /// How many read-only accesses have been copied.
   int NumReadOnlyCopied = 0;
@@ -267,16 +285,19 @@ public:
       IslQuotaScope QuotaScope = MaxOpGuard.enter();
 
       computeCommon();
+      if (NormalizePHIs)
+        computeNormalizedPHIs();
       Known = computeKnown(true, true);
 
       // Preexisting ValInsts use the known content analysis of themselves.
       Translator = makeIdentityMap(Known.range(), false);
     }
 
-    if (!Known || !Translator) {
+    if (!Known || !Translator || !NormalizeMap) {
       assert(isl_ctx_last_error(IslCtx.get()) == isl_error_quota);
       Known = nullptr;
       Translator = nullptr;
+      NormalizeMap = nullptr;
       DEBUG(dbgs() << "Known analysis exceeded max_operations\n");
       return false;
     }
@@ -293,6 +314,7 @@ public:
                           << '\n';
     OS.indent(Indent + 4) << "Known loads forwarded: " << NumKnownLoadsForwarded
                           << '\n';
+    OS.indent(Indent + 4) << "Reloads: " << NumReloads << '\n';
     OS.indent(Indent + 4) << "Read-only accesses copied: " << NumReadOnlyCopied
                           << '\n';
     OS.indent(Indent + 4) << "Operand trees forwarded: " << NumForwardedTrees
@@ -391,12 +413,11 @@ public:
   ///                    use DoIt==true if an operand tree is not known to be
   ///                    forwardable.
   ///
-  /// @return FD_NotApplicable  if @p Inst is not a LoadInst.
-  ///         FD_CannotForward  if no array element to load from was found.
-  ///         FD_CanForwardLeaf if the load is already in the target statement
-  ///                           instance.
-  ///         FD_CanForwardTree if @p Inst is forwardable.
-  ///         FD_DidForward     if @p DoIt was true.
+  /// @return FD_NotApplicable  if @p Inst cannot be forwarded by creating a new
+  ///                           load.
+  ///         FD_CannotForward  if the pointer operand cannot be forwarded.
+  ///         FD_CanForwardProfitably if @p Inst is forwardable.
+  ///         FD_DidForwardTree if @p DoIt was true.
   ForwardingDecision forwardKnownLoad(ScopStmt *TargetStmt, Instruction *Inst,
                                       ScopStmt *UseStmt, Loop *UseLoop,
                                       isl::map UseToTarget, ScopStmt *DefStmt,
@@ -421,10 +442,7 @@ public:
     //   do not add another MemoryAccess.
     MemoryAccess *Access = TargetStmt->getArrayAccessOrNULLFor(LI);
     if (Access && !DoIt)
-      return FD_CanForwardTree;
-
-    if (DoIt)
-      TargetStmt->prependInstruction(LI);
+      return FD_CanForwardProfitably;
 
     ForwardingDecision OpDecision =
         forwardTree(TargetStmt, LI->getPointerOperand(), DefStmt, DefLoop,
@@ -435,11 +453,12 @@ public:
       return OpDecision;
 
     case FD_CanForwardLeaf:
-    case FD_CanForwardTree:
+    case FD_CanForwardProfitably:
       assert(!DoIt);
       break;
 
-    case FD_DidForward:
+    case FD_DidForwardLeaf:
+    case FD_DidForwardTree:
       assert(DoIt);
       break;
 
@@ -451,6 +470,7 @@ public:
 
     // { DomainDef[] -> ValInst[] }
     isl::map ExpectedVal = makeValInst(Inst, UseStmt, UseLoop);
+    assert(isNormalized(ExpectedVal) && "LoadInsts are always normalized");
 
     // { DomainTarget[] -> ValInst[] }
     isl::map TargetExpectedVal = ExpectedVal.apply_domain(UseToTarget);
@@ -462,10 +482,13 @@ public:
 
     isl::map SameVal = singleLocation(Candidates, getDomainFor(TargetStmt));
     if (!SameVal)
-      return FD_CannotForward;
+      return FD_NotApplicable;
+
+    if (DoIt)
+      TargetStmt->prependInstruction(LI);
 
     if (!DoIt)
-      return FD_CanForwardTree;
+      return FD_CanForwardProfitably;
 
     if (Access) {
       DEBUG(dbgs() << "    forwarded known load with preexisting MemoryAccess"
@@ -519,7 +542,77 @@ public:
 
     NumKnownLoadsForwarded++;
     TotalKnownLoadsForwarded++;
-    return FD_DidForward;
+    return FD_DidForwardTree;
+  }
+
+  /// Forward a scalar by redirecting the access to an array element that stores
+  /// the same value.
+  ///
+  /// @param TargetStmt  The statement the operand tree will be copied to.
+  /// @param Inst        The scalar to forward.
+  /// @param UseStmt     The statement that uses @p Inst.
+  /// @param UseLoop     The loop @p Inst is used in.
+  /// @param UseToTarget { DomainUse[] -> DomainTarget[] }
+  ///                    A mapping from the statement instance @p Inst is used
+  ///                    in, to the statement instance it is forwarded to.
+  /// @param DefStmt     The statement @p Inst is defined in.
+  /// @param DefLoop     The loop which contains @p Inst.
+  /// @param DefToTarget { DomainDef[] -> DomainTarget[] }
+  ///                    A mapping from the statement instance @p Inst is
+  ///                    defined in, to the statement instance it is forwarded
+  ///                    to.
+  /// @param DoIt        If false, only determine whether an operand tree can be
+  ///                    forwarded. If true, carry out the forwarding. Do not
+  ///                    use DoIt==true if an operand tree is not known to be
+  ///                    forwardable.
+  ///
+  /// @return FD_NotApplicable        if @p Inst cannot be reloaded.
+  ///         FD_CanForwardLeaf       if @p Inst can be reloaded.
+  ///         FD_CanForwardProfitably if @p Inst has been reloaded.
+  ///         FD_DidForwardLeaf       if @p DoIt was true.
+  ForwardingDecision reloadKnownContent(ScopStmt *TargetStmt, Instruction *Inst,
+                                        ScopStmt *UseStmt, Loop *UseLoop,
+                                        isl::map UseToTarget, ScopStmt *DefStmt,
+                                        Loop *DefLoop, isl::map DefToTarget,
+                                        bool DoIt) {
+    // Cannot do anything without successful known analysis.
+    if (Known.is_null())
+      return FD_NotApplicable;
+
+    MemoryAccess *Access = TargetStmt->lookupInputAccessOf(Inst);
+    if (Access && Access->isLatestArrayKind()) {
+      if (DoIt)
+        return FD_DidForwardLeaf;
+      return FD_CanForwardLeaf;
+    }
+
+    // { DomainDef[] -> ValInst[] }
+    isl::union_map ExpectedVal = makeNormalizedValInst(Inst, UseStmt, UseLoop);
+
+    // { DomainTarget[] -> ValInst[] }
+    isl::union_map TargetExpectedVal = ExpectedVal.apply_domain(UseToTarget);
+    isl::union_map TranslatedExpectedVal =
+        TargetExpectedVal.apply_range(Translator);
+
+    // { DomainTarget[] -> Element[] }
+    isl::union_map Candidates = findSameContentElements(TranslatedExpectedVal);
+
+    isl::map SameVal = singleLocation(Candidates, getDomainFor(TargetStmt));
+    if (!SameVal)
+      return FD_NotApplicable;
+
+    if (!DoIt)
+      return FD_CanForwardProfitably;
+
+    if (!Access)
+      Access = TargetStmt->ensureValueRead(Inst);
+
+    simplify(SameVal);
+    Access->setNewAccessRelation(SameVal);
+
+    TotalReloads++;
+    NumReloads++;
+    return FD_DidForwardLeaf;
   }
 
   /// Forwards a speculatively executable instruction.
@@ -584,11 +677,12 @@ public:
         return FD_CannotForward;
 
       case FD_CanForwardLeaf:
-      case FD_CanForwardTree:
+      case FD_CanForwardProfitably:
         assert(!DoIt);
         break;
 
-      case FD_DidForward:
+      case FD_DidForwardLeaf:
+      case FD_DidForwardTree:
         assert(DoIt);
         break;
 
@@ -598,8 +692,8 @@ public:
     }
 
     if (DoIt)
-      return FD_DidForward;
-    return FD_CanForwardTree;
+      return FD_DidForwardTree;
+    return FD_CanForwardProfitably;
   }
 
   /// Determines whether an operand tree can be forwarded or carries out a
@@ -636,14 +730,14 @@ public:
     case VirtualUse::Hoisted:
       // These can be used anywhere without special considerations.
       if (DoIt)
-        return FD_DidForward;
+        return FD_DidForwardTree;
       return FD_CanForwardLeaf;
 
     case VirtualUse::Synthesizable: {
       // ScopExpander will take care for of generating the code at the new
       // location.
       if (DoIt)
-        return FD_DidForward;
+        return FD_DidForwardTree;
 
       // Check if the value is synthesizable at the new location as well. This
       // might be possible when leaving a loop for which ScalarEvolution is
@@ -682,7 +776,7 @@ public:
 
       NumReadOnlyCopied++;
       TotalReadOnlyCopied++;
-      return FD_DidForward;
+      return FD_DidForwardLeaf;
 
     case VirtualUse::Intra:
       // Knowing that UseStmt and DefStmt are the same statement instance, just
@@ -725,6 +819,12 @@ public:
       if (KnownResult != FD_NotApplicable)
         return KnownResult;
 
+      ForwardingDecision ReloadResult =
+          reloadKnownContent(TargetStmt, Inst, UseStmt, UseLoop, UseToTarget,
+                             DefStmt, DefLoop, DefToTarget, DoIt);
+      if (ReloadResult != FD_NotApplicable)
+        return ReloadResult;
+
       // When no method is found to forward the operand tree, we effectively
       // cannot handle it.
       DEBUG(dbgs() << "    Cannot forward instruction: " << *Inst << "\n");
@@ -751,17 +851,18 @@ public:
 
     ForwardingDecision Assessment = forwardTree(
         Stmt, RA->getAccessValue(), Stmt, InLoop, TargetToUse, false);
-    assert(Assessment != FD_DidForward);
-    if (Assessment != FD_CanForwardTree)
+    assert(Assessment != FD_DidForwardTree && Assessment != FD_DidForwardLeaf);
+    if (Assessment != FD_CanForwardProfitably)
       return false;
 
     ForwardingDecision Execution = forwardTree(Stmt, RA->getAccessValue(), Stmt,
                                                InLoop, TargetToUse, true);
-    assert(Execution == FD_DidForward &&
+    assert(((Execution == FD_DidForwardTree) ||
+            (Execution == FD_DidForwardLeaf)) &&
            "A previous positive assessment must also be executable");
-    (void)Execution;
 
-    Stmt->removeSingleMemoryAccess(RA);
+    if (Execution == FD_DidForwardTree)
+      Stmt->removeSingleMemoryAccess(RA);
     return true;
   }
 
