@@ -849,7 +849,7 @@ __isl_give isl_id_to_ast_expr *
 IslNodeBuilder::createNewAccesses(ScopStmt *Stmt,
                                   __isl_keep isl_ast_node *Node) {
   isl_id_to_ast_expr *NewAccesses =
-      isl_id_to_ast_expr_alloc(Stmt->getParent()->getIslCtx(), 0);
+      isl_id_to_ast_expr_alloc(Stmt->getParent()->getIslCtx().get(), 0);
 
   auto *Build = IslAstInfo::getBuild(Node);
   assert(Build && "Could not obtain isl_ast_build from user node");
@@ -902,6 +902,8 @@ IslNodeBuilder::createNewAccesses(ScopStmt *Stmt,
     // isl cannot generate an index expression for access-nothing accesses.
     isl::set AccDomain =
         give(isl_pw_multi_aff_domain(isl_pw_multi_aff_copy(PWAccRel)));
+    isl::set Context = S.getContext();
+    AccDomain = AccDomain.intersect_params(Context);
     if (isl_set_is_empty(AccDomain.keep()) == isl_bool_true) {
       isl_pw_multi_aff_free(PWAccRel);
       continue;
@@ -1353,7 +1355,7 @@ bool IslNodeBuilder::preloadInvariantEquivClass(
     return false;
 
   // The execution context of the IAClass.
-  isl_set *&ExecutionCtx = IAClass.ExecutionContext;
+  isl::set &ExecutionCtx = IAClass.ExecutionContext;
 
   // If the base pointer of this class is dependent on another one we have to
   // make sure it was preloaded already.
@@ -1364,8 +1366,8 @@ bool IslNodeBuilder::preloadInvariantEquivClass(
 
     // After we preloaded the BaseIAClass we adjusted the BaseExecutionCtx and
     // we need to refine the ExecutionCtx.
-    isl_set *BaseExecutionCtx = isl_set_copy(BaseIAClass->ExecutionContext);
-    ExecutionCtx = isl_set_intersect(ExecutionCtx, BaseExecutionCtx);
+    isl::set BaseExecutionCtx = BaseIAClass->ExecutionContext;
+    ExecutionCtx = ExecutionCtx.intersect(BaseExecutionCtx);
   }
 
   // If the size of a dimension is dependent on another class, make sure it is
@@ -1381,8 +1383,8 @@ bool IslNodeBuilder::preloadInvariantEquivClass(
 
         // After we preloaded the BaseIAClass we adjusted the BaseExecutionCtx
         // and we need to refine the ExecutionCtx.
-        isl_set *BaseExecutionCtx = isl_set_copy(BaseIAClass->ExecutionContext);
-        ExecutionCtx = isl_set_intersect(ExecutionCtx, BaseExecutionCtx);
+        isl::set BaseExecutionCtx = BaseIAClass->ExecutionContext;
+        ExecutionCtx = ExecutionCtx.intersect(BaseExecutionCtx);
       }
     }
   }
@@ -1390,7 +1392,7 @@ bool IslNodeBuilder::preloadInvariantEquivClass(
   Instruction *AccInst = MA->getAccessInstruction();
   Type *AccInstTy = AccInst->getType();
 
-  Value *PreloadVal = preloadInvariantLoad(*MA, isl_set_copy(ExecutionCtx));
+  Value *PreloadVal = preloadInvariantLoad(*MA, ExecutionCtx.copy());
   if (!PreloadVal)
     return false;
 
