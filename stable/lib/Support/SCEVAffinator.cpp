@@ -162,6 +162,7 @@ isl::pw_aff SCEVAffinator::addModuloSemantic(isl::pw_aff PWA,
   isl::set Domain = PWA.domain();
   isl::pw_aff AddPW =
       isl::manage(getWidthExpValOnDomain(Width - 1, Domain.take()));
+
   return PWA.add(AddPW).mod(ModVal).sub(AddPW);
 }
 

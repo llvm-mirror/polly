@@ -122,7 +122,6 @@ struct AstBuildUserInfo {
   /// The last iterator id created for the current SCoP.
   isl_id *LastForNodeId = nullptr;
 };
-
 } // namespace polly
 
 /// Free an IslAstUserPayload object pointed to by @p Ptr.
@@ -220,9 +219,14 @@ static bool astScheduleDimIsParallel(__isl_keep isl_ast_build *Build,
   isl_union_map *Deps = D->getDependences(
       Dependences::TYPE_RAW | Dependences::TYPE_WAW | Dependences::TYPE_WAR);
 
-  if (!D->isParallel(Schedule, Deps, &NodeInfo->MinimalDependenceDistance) &&
-      !isl_union_map_free(Schedule))
+  if (!D->isParallel(Schedule, Deps)) {
+    isl_union_map *DepsAll =
+        D->getDependences(Dependences::TYPE_RAW | Dependences::TYPE_WAW |
+                          Dependences::TYPE_WAR | Dependences::TYPE_TC_RED);
+    D->isParallel(Schedule, DepsAll, &NodeInfo->MinimalDependenceDistance);
+    isl_union_map_free(Schedule);
     return false;
+  }
 
   isl_union_map *RedDeps = D->getDependences(Dependences::TYPE_TC_RED);
   if (!D->isParallel(Schedule, RedDeps))

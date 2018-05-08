@@ -23,6 +23,7 @@
 #include <isl/map_type.h>
 #include <isl/val.h>
 #include <isl/stdint.h>
+#include <isl/stride_info.h>
 
 #if defined(__cplusplus)
 extern "C" {
@@ -604,6 +605,9 @@ __isl_give isl_map *isl_map_gist_params(__isl_take isl_map *map,
 __isl_give isl_map *isl_map_gist_basic_map(__isl_take isl_map *map,
 	__isl_take isl_basic_map *context);
 
+__isl_give isl_stride_info *isl_map_get_range_stride_info(
+	__isl_keep isl_map *map, int pos);
+
 __isl_export
 __isl_give isl_map *isl_map_coalesce(__isl_take isl_map *map);
 
@@ -638,6 +642,9 @@ __isl_give isl_basic_map *isl_basic_map_align_params(
 	__isl_take isl_basic_map *bmap, __isl_take isl_space *model);
 __isl_give isl_map *isl_map_align_params(__isl_take isl_map *map,
 	__isl_take isl_space *model);
+__isl_give isl_basic_map *isl_basic_map_drop_unused_params(
+	__isl_take isl_basic_map *bmap);
+__isl_give isl_map *isl_map_drop_unused_params(__isl_take isl_map *map);
 
 __isl_give isl_mat *isl_basic_map_equalities_matrix(
 		__isl_keep isl_basic_map *bmap, enum isl_dim_type c1,
