@@ -28,8 +28,8 @@
   on integer polyhedra to analyze and optimize the memory access pattern of a
   program. We currently perform classical loop transformations, especially
   tiling and loop fusion to improve data-locality. Polly can also exploit
-  OpenMP level parallelism, expose SIMDization opportunities. Work has also be
-  done in the area of automatic GPU code generation.</p>
+  OpenMP level parallelism and expose SIMDization opportunities. Work has also
+  been done in the area of automatic GPU code generation.</p>
 
   For many users, however, it's not the existing optimizations in Polly that are
   of most interest, but the new analyses and optimizations enabled by the Polly
@@ -52,7 +52,7 @@
     &otimes; A &otimes; B, where A, B, and C are three appropriately sized
     matrices, &oplus; and &otimes; operations are originating from the
     corresponding matrix semiring, and &alpha; and &beta; are constants, and
-    beta is not equal to zero. It allows to obtain the highly optimized form
+    beta is not equal to zero. It allows obtaining the highly optimized form
     structured similar to the expert implementation of GEMM that can be found
     in GotoBLAS and its successors.
     <h4>The performance evaluation of GEMM</h4>
@@ -87,7 +87,7 @@
   <tr><td width="120"><p>July</p></td>
   <td>
     <h4>AST Generation Paper published in TOPLAS</h4>
-    The July issue of TOPLAS contains a 50 page discussion of the AST
+    The July issue of TOPLAS contains a 50-page discussion of the AST
     generation techniques used in Polly. This discussion gives not only an
     in-depth description of how we (re)generate an imperative AST from our
     polyhedral based mathematical program description, but also gives
@@ -100,7 +100,7 @@
       <li><b>Polyhedral unrolling:</b> We discuss techniques that allow the
       unrolling of non-trivial loops in the context of parameteric loop bounds,
       complex tile shapes and conditionally executed statements. Such unrolling
-      support enables the generation of predicated code e.g. in the context of
+      support enables the generation of predicated code, e.g., in the context of
       GPGPU computing.
       <li><b>Isolation for full/partial tile separation:</b> We discuss native
       support for handling full/partial tile separation and -- in general --
@@ -110,17 +110,15 @@
       mappings are lowered to efficient C/LLVM code.
       <li><b>User-defined constraint sets for run-time checks</b> We discuss how
       arbitrary sets of constraints can be used to automatically create run-time
-      checks that ensure a set of constrainst actually hold. This feature is
+      checks that ensure a set of constraints actually hold. This feature is
       very useful to verify at run-time various assumptions that have been taken
       program optimization.
     </ul>
-
    <a href="http://www.grosser.es#pub-polyhedral-AST-generation">
    <em>Polyhedral AST generation is more than scanning polyhedra</em></a><br />
     Tobias Grosser, Sven Verdoolaege, Albert Cohen<br />
     ACM Transations on Programming Languages and Systems (TOPLAS), 37(4),
     July 2015
-
     <br>
     <br>
     <br>
@@ -179,7 +177,7 @@
   <td>
   <h4>Static link Polly into tools</h4> Polly can now be configured with 'cmake
   -D LINK_POLLY_INTO_TOOLS:Bool=ON' to be statically linked in the tools (opt,
-  bugpoint, and clang.) This makes it easier to use polly without having to load
+  bugpoint, and clang). This makes it easier to use polly without having to load
   a shared library, and it also reduces the complexity of compiling Polly on
   Windows.
   </td>
@@ -259,8 +257,8 @@
      We also relicensed isl under the <b>MIT license</b>. This means, with the
      exception of GMP (LGPL), there is no other (L)GPL licensed software used in
      Polly. The
-     use of GMP is limited to a well defined interface. Replacing it with
-     a BSD licensed replacement is a tractable engineering project we would
+     use of GMP is limited to a well-defined interface. Replacing it with
+     a BSD-licensed replacement is a tractable engineering project we would
      be very interested in. For more information about isl see the <a
      href="http://www.kotnet.org/~skimo/isl/manual.pdf">isl manual</a>.
      </p>
@@ -326,7 +324,7 @@ research tool.<br \>
   <tr>
   <td><p>July</p></td>
   <td>
-  <p> Polly builder as part of the <a
+  <p>Polly builder as part of the <a
   href="http://lab.llvm.org:8011/console">LLVM Buildbots</a>
   </p>
   </td>
@@ -335,7 +333,7 @@ research tool.<br \>
   <tr>
   <td><p>June</p></td>
   <td>
-  <p><a href="http://www.grosser.es">Tobias</a> is founded for
+  <p><a href="http://www.grosser.es">Tobias</a> is funded for
   three years by a <a
   href="http://research.google.com/university/relations/fellowship_recipients.html">
   Google Europe Fellowship in Efficient Computing</a>.
@@ -344,7 +342,7 @@ research tool.<br \>
   </tr>
 
   <tr>
-  <td><p>May </p></td>
+  <td><p>May</p></td>
   <td><p><a href="http://www.grosser.es">Tobias</a>' diploma thesis and
   Raghesh's master thesis. See our <a
   href="publications.html">list of publications</a>.</p></td>
@@ -364,34 +362,34 @@ research tool.<br \>
   </td>
   </tr>
   <tr>
-  <td><p>Februar</p></td>
+  <td><p>February</p></td>
   <td><p>pollycc - a script to automatically compile with
-  polyhedral optimizations </p></td>
+  polyhedral optimizations</p></td>
   </tr>
 
   <tr>
-  <td><p> Januar</p></td>
-  <td><p> Basic OpenMP support, Alias analysis integration,
-  Pluto/POCC support </p></td>
+  <td><p>January</p></td>
+  <td><p>Basic OpenMP support, alias analysis integration,
+  Pluto/POCC support</p></td>
   </tr>
 
   <tr><td><b><br>2010</b></td></tr>
   <tr>
-  <td><p> Dezember </p></td>
-  <td><p>Basic vectorization support </p></td>
+  <td><p>December</p></td>
+  <td><p>Basic vectorization support</p></td>
   </tr>
 
   <tr>
-  <td><p> November </p></td>
+  <td><p>November</p></td>
   <td><p>Talk at the <a
-  href="http://llvm.org/devmtg/2010-11/">LLVM Developer Meeting</a> </p></td>
+  href="http://llvm.org/devmtg/2010-11/">LLVM Developers' Meeting</a> </p></td>
   </tr>
 
   <tr>
   <td><p>October</p></td>
-  <td><p>Dependency analysis </p>
-  <p>Finished Phase 1 - Get something working </p>
-  <p>Support scalar dependences and sequential SCoPs </p>
+  <td><p>Dependency analysis</p>
+  <p>Finished Phase 1 - Get something working</p>
+  <p>Support scalar dependences and sequential SCoPs</p>
   </td>
   </tr>
 
@@ -404,43 +402,43 @@ research tool.<br \>
 
   <tr>
   <td><p>July</p></td>
-  <td><p>Code generation works for normal SCoPs.  </p></td>
+  <td><p>Code generation works for normal SCoPs</p></td>
   </tr>
 
   <tr>
   <td><p>May</p></td>
-  <td><p>The CLooG AST can be parsed.</p>
+  <td><p>The CLooG AST can be parsed</p>
   </td>
   </tr>
 
   <tr>
   <td><p>April</p></td>
-  <td><p>SCoPs can automatically be detected. </p></td>
+  <td><p>SCoPs can automatically be detected</p></td>
   </tr>
 
   <tr>
   <td><p>March</p></td>
-  <td><p>The RegionInfo framework is almost completed.  </p></td>
+  <td><p>The RegionInfo framework is almost completed</p></td>
   </tr>
 
   <tr>
   <td><p>February</p></td>
   <td><p>Translate a simple loop to Polly-IR and regenerate a loop structure
-         with CLooG works.  </p>
-  <p>ISL and CLooG are integrated.  </p></td>
+         with CLooG works</p>
+  <p>ISL and CLooG are integrated</p></td>
   </tr>
 
   </tr>
 
   <tr>
   <td><p>January</p></td>
-  <td><p>The RegionInfo pass is finished.  </p></td>
+  <td><p>The RegionInfo pass is finished</p></td>
   </tr>
 
   <tr><td><b><br>2009</b></td></tr>
   <tr>
   <td><p>End of the year</p></td>
-  <td><p>Work on the infrastructure started.  </p></td>
+  <td><p>Work on the infrastructure started</p></td>
   </tr>
   </table>
   </ul>
