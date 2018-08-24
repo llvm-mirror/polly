@@ -11,25 +11,13 @@
 #define ISL_SPACE_H
 
 #include <isl/ctx.h>
-#include <isl/id.h>
+#include <isl/space_type.h>
+#include <isl/id_type.h>
 #include <isl/printer.h>
 
 #if defined(__cplusplus)
 extern "C" {
 #endif
-
-struct isl_space;
-typedef struct isl_space isl_space;
-
-enum isl_dim_type {
-	isl_dim_cst,
-	isl_dim_param,
-	isl_dim_in,
-	isl_dim_out,
-	isl_dim_set = isl_dim_out,
-	isl_dim_div,
-	isl_dim_all
-};
 
 isl_ctx *isl_space_get_ctx(__isl_keep isl_space *dim);
 __isl_give isl_space *isl_space_alloc(isl_ctx *ctx,
@@ -91,7 +79,7 @@ __isl_give isl_space *isl_space_add_dims(__isl_take isl_space *space,
 __isl_give isl_space *isl_space_move_dims(__isl_take isl_space *space,
 	enum isl_dim_type dst_type, unsigned dst_pos,
 	enum isl_dim_type src_type, unsigned src_pos, unsigned n);
-__isl_give isl_space *isl_space_insert_dims(__isl_take isl_space *dim,
+__isl_give isl_space *isl_space_insert_dims(__isl_take isl_space *space,
 	enum isl_dim_type type, unsigned pos, unsigned n);
 __isl_give isl_space *isl_space_join(__isl_take isl_space *left,
 	__isl_take isl_space *right);

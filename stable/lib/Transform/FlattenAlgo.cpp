@@ -54,20 +54,19 @@ bool isVariableDim(const isl::basic_map &BMap) {
 
 /// Whether Map's first out dimension is no constant nor piecewise constant.
 bool isVariableDim(const isl::map &Map) {
-  return Map.foreach_basic_map([](isl::basic_map BMap) -> isl::stat {
+  for (isl::basic_map BMap : Map.get_basic_map_list())
     if (isVariableDim(BMap))
-      return isl::stat::error;
-    return isl::stat::ok;
-  }) == isl::stat::ok;
+      return false;
+
+  return true;
 }
 
 /// Whether UMap's first out dimension is no (piecewise) constant.
 bool isVariableDim(const isl::union_map &UMap) {
-  return UMap.foreach_map([](isl::map Map) -> isl::stat {
+  for (isl::map Map : UMap.get_map_list())
     if (isVariableDim(Map))
-      return isl::stat::error;
-    return isl::stat::ok;
-  }) == isl::stat::ok;
+      return false;
+  return true;
 }
 
 /// Compute @p UPwAff - @p Val.
@@ -76,13 +75,16 @@ isl::union_pw_aff subtract(isl::union_pw_aff UPwAff, isl::val Val) {
     return UPwAff;
 
   auto Result = isl::union_pw_aff::empty(UPwAff.get_space());
-  UPwAff.foreach_pw_aff([=, &Result](isl::pw_aff PwAff) -> isl::stat {
-    auto ValAff =
-        isl::pw_aff(isl::set::universe(PwAff.get_space().domain()), Val);
-    auto Subtracted = PwAff.sub(ValAff);
-    Result = Result.union_add(isl::union_pw_aff(Subtracted));
-    return isl::stat::ok;
-  });
+  isl::stat Stat =
+      UPwAff.foreach_pw_aff([=, &Result](isl::pw_aff PwAff) -> isl::stat {
+        auto ValAff =
+            isl::pw_aff(isl::set::universe(PwAff.get_space().domain()), Val);
+        auto Subtracted = PwAff.sub(ValAff);
+        Result = Result.union_add(isl::union_pw_aff(Subtracted));
+        return isl::stat::ok();
+      });
+  if (Stat.is_error())
+    return {};
   return Result;
 }
 
@@ -92,13 +94,16 @@ isl::union_pw_aff multiply(isl::union_pw_aff UPwAff, isl::val Val) {
     return UPwAff;
 
   auto Result = isl::union_pw_aff::empty(UPwAff.get_space());
-  UPwAff.foreach_pw_aff([=, &Result](isl::pw_aff PwAff) -> isl::stat {
-    auto ValAff =
-        isl::pw_aff(isl::set::universe(PwAff.get_space().domain()), Val);
-    auto Multiplied = PwAff.mul(ValAff);
-    Result = Result.union_add(Multiplied);
-    return isl::stat::ok;
-  });
+  isl::stat Stat =
+      UPwAff.foreach_pw_aff([=, &Result](isl::pw_aff PwAff) -> isl::stat {
+        auto ValAff =
+            isl::pw_aff(isl::set::universe(PwAff.get_space().domain()), Val);
+        auto Multiplied = PwAff.mul(ValAff);
+        Result = Result.union_add(Multiplied);
+        return isl::stat::ok();
+      });
+  if (Stat.is_error())
+    return {};
   return Result;
 }
 
@@ -113,11 +118,10 @@ isl::union_map scheduleProjectOut(const isl::union_map &UMap, unsigned first,
                     have no effect on schedule ranges */
 
   auto Result = isl::union_map::empty(UMap.get_space());
-  UMap.foreach_map([=, &Result](isl::map Map) -> isl::stat {
+  for (isl::map Map : UMap.get_map_list()) {
     auto Outprojected = Map.project_out(isl::dim::out, first, n);
     Result = Result.add_map(Outprojected);
-    return isl::stat::ok;
-  });
+  }
   return Result;
 }
 
@@ -128,23 +132,20 @@ isl::union_map scheduleProjectOut(const isl::union_map &UMap, unsigned first,
 /// number of dimensions is not supported by the other code in this file.
 size_t scheduleScatterDims(const isl::union_map &Schedule) {
   unsigned Dims = 0;
-  Schedule.foreach_map([&Dims](isl::map Map) -> isl::stat {
+  for (isl::map Map : Schedule.get_map_list())
     Dims = std::max(Dims, Map.dim(isl::dim::out));
-    return isl::stat::ok;
-  });
   return Dims;
 }
 
 /// Return the @p pos' range dimension, converted to an isl_union_pw_aff.
 isl::union_pw_aff scheduleExtractDimAff(isl::union_map UMap, unsigned pos) {
   auto SingleUMap = isl::union_map::empty(UMap.get_space());
-  UMap.foreach_map([=, &SingleUMap](isl::map Map) -> isl::stat {
-    auto MapDims = Map.dim(isl::dim::out);
-    auto SingleMap = Map.project_out(isl::dim::out, 0, pos);
+  for (isl::map Map : UMap.get_map_list()) {
+    unsigned MapDims = Map.dim(isl::dim::out);
+    isl::map SingleMap = Map.project_out(isl::dim::out, 0, pos);
     SingleMap = SingleMap.project_out(isl::dim::out, 1, MapDims - pos - 1);
     SingleUMap = SingleUMap.add_map(SingleMap);
-    return isl::stat::ok;
-  });
+  };
 
   auto UAff = isl::union_pw_multi_aff(SingleUMap);
   auto FirstMAff = isl::multi_union_pw_aff(UAff);
@@ -180,7 +181,7 @@ isl::union_map tryFlattenSequence(isl::union_map Schedule) {
 
   // Would cause an infinite loop.
   if (!isDimBoundedByConstant(ScatterSet, 0)) {
-    DEBUG(dbgs() << "Abort; dimension is not of fixed size\n");
+    LLVM_DEBUG(dbgs() << "Abort; dimension is not of fixed size\n");
     return nullptr;
   }
 
@@ -191,8 +192,8 @@ isl::union_map tryFlattenSequence(isl::union_map Schedule) {
   auto Counter = isl::pw_aff(isl::local_space(ParamSpace.set_from_params()));
 
   while (!ScatterSet.is_empty()) {
-    DEBUG(dbgs() << "Next counter:\n  " << Counter << "\n");
-    DEBUG(dbgs() << "Remaining scatter set:\n  " << ScatterSet << "\n");
+    LLVM_DEBUG(dbgs() << "Next counter:\n  " << Counter << "\n");
+    LLVM_DEBUG(dbgs() << "Remaining scatter set:\n  " << ScatterSet << "\n");
     auto ThisSet = ScatterSet.project_out(isl::dim::set, 1, Dims - 1);
     auto ThisFirst = ThisSet.lexmin();
     auto ScatterFirst = ThisFirst.add_dims(isl::dim::set, Dims - 1);
@@ -207,10 +208,11 @@ isl::union_map tryFlattenSequence(isl::union_map Schedule) {
     auto RemainingSubSchedule = scheduleProjectOut(SubSchedule, 0, 1);
 
     auto FirstSubScatter = isl::set(FirstSubSchedule.range());
-    DEBUG(dbgs() << "Next step in sequence is:\n  " << FirstSubScatter << "\n");
+    LLVM_DEBUG(dbgs() << "Next step in sequence is:\n  " << FirstSubScatter
+                      << "\n");
 
     if (!isDimBoundedByParameter(FirstSubScatter, 0)) {
-      DEBUG(dbgs() << "Abort; sequence step is not bounded\n");
+      LLVM_DEBUG(dbgs() << "Abort; sequence step is not bounded\n");
       return nullptr;
     }
 
@@ -241,7 +243,8 @@ isl::union_map tryFlattenSequence(isl::union_map Schedule) {
     Counter = Counter.add(PartLen);
   }
 
-  DEBUG(dbgs() << "Sequence-flatten result is:\n  " << NewSchedule << "\n");
+  LLVM_DEBUG(dbgs() << "Sequence-flatten result is:\n  " << NewSchedule
+                    << "\n");
   return NewSchedule;
 }
 
@@ -268,19 +271,19 @@ isl::union_map tryFlattenLoop(isl::union_map Schedule) {
   SubExtent = SubExtent.project_out(isl::dim::set, 1, SubDims - 1);
 
   if (!isDimBoundedByConstant(SubExtent, 0)) {
-    DEBUG(dbgs() << "Abort; dimension not bounded by constant\n");
+    LLVM_DEBUG(dbgs() << "Abort; dimension not bounded by constant\n");
     return nullptr;
   }
 
   auto Min = SubExtent.dim_min(0);
-  DEBUG(dbgs() << "Min bound:\n  " << Min << "\n");
+  LLVM_DEBUG(dbgs() << "Min bound:\n  " << Min << "\n");
   auto MinVal = getConstant(Min, false, true);
   auto Max = SubExtent.dim_max(0);
-  DEBUG(dbgs() << "Max bound:\n  " << Max << "\n");
+  LLVM_DEBUG(dbgs() << "Max bound:\n  " << Max << "\n");
   auto MaxVal = getConstant(Max, true, false);
 
   if (!MinVal || !MaxVal || MinVal.is_nan() || MaxVal.is_nan()) {
-    DEBUG(dbgs() << "Abort; dimension bounds could not be determined\n");
+    LLVM_DEBUG(dbgs() << "Abort; dimension bounds could not be determined\n");
     return nullptr;
   }
 
@@ -298,14 +301,15 @@ isl::union_map tryFlattenLoop(isl::union_map Schedule) {
   auto IndexMap = isl::union_map(Index);
 
   auto Result = IndexMap.flat_range_product(RemainingSubSchedule);
-  DEBUG(dbgs() << "Loop-flatten result is:\n  " << Result << "\n");
+  LLVM_DEBUG(dbgs() << "Loop-flatten result is:\n  " << Result << "\n");
   return Result;
 }
 } // anonymous namespace
 
 isl::union_map polly::flattenSchedule(isl::union_map Schedule) {
   auto Dims = scheduleScatterDims(Schedule);
-  DEBUG(dbgs() << "Recursive schedule to process:\n  " << Schedule << "\n");
+  LLVM_DEBUG(dbgs() << "Recursive schedule to process:\n  " << Schedule
+                    << "\n");
 
   // Base case; no dimensions left
   if (Dims == 0) {
@@ -319,20 +323,20 @@ isl::union_map polly::flattenSchedule(isl::union_map Schedule) {
 
   // Fixed dimension; no need to preserve variabledness.
   if (!isVariableDim(Schedule)) {
-    DEBUG(dbgs() << "Fixed dimension; try sequence flattening\n");
+    LLVM_DEBUG(dbgs() << "Fixed dimension; try sequence flattening\n");
     auto NewScheduleSequence = tryFlattenSequence(Schedule);
     if (NewScheduleSequence)
       return NewScheduleSequence;
   }
 
   // Constant stride
-  DEBUG(dbgs() << "Try loop flattening\n");
+  LLVM_DEBUG(dbgs() << "Try loop flattening\n");
   auto NewScheduleLoop = tryFlattenLoop(Schedule);
   if (NewScheduleLoop)
     return NewScheduleLoop;
 
   // Try again without loop condition (may blow up the number of pieces!!)
-  DEBUG(dbgs() << "Try sequence flattening again\n");
+  LLVM_DEBUG(dbgs() << "Try sequence flattening again\n");
   auto NewScheduleSequence = tryFlattenSequence(Schedule);
   if (NewScheduleSequence)
     return NewScheduleSequence;

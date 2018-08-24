@@ -3,14 +3,14 @@
 
 #include <isl/ctx.h>
 #include <isl/constraint.h>
-#include <isl/space.h>
+#include <isl/space_type.h>
 #include <isl/set_type.h>
 #include <isl/point.h>
 #include <isl/printer.h>
 #include <isl/union_set_type.h>
 #include <isl/aff_type.h>
 #include <isl/polynomial_type.h>
-#include <isl/val.h>
+#include <isl/val_type.h>
 
 #if defined(__cplusplus)
 extern "C" {
@@ -194,6 +194,9 @@ __isl_give isl_pw_qpolynomial *isl_pw_qpolynomial_drop_dims(
 __isl_give isl_pw_qpolynomial *isl_pw_qpolynomial_split_dims(
 	__isl_take isl_pw_qpolynomial *pwqp,
 	enum isl_dim_type type, unsigned first, unsigned n);
+
+__isl_give isl_pw_qpolynomial *isl_pw_qpolynomial_drop_unused_params(
+	__isl_take isl_pw_qpolynomial *pwqp);
 
 __isl_give isl_pw_qpolynomial *isl_pw_qpolynomial_add(
 	__isl_take isl_pw_qpolynomial *pwqp1,
@@ -423,6 +426,9 @@ __isl_give isl_pw_qpolynomial_fold *isl_pw_qpolynomial_fold_move_dims(
 	enum isl_dim_type dst_type, unsigned dst_pos,
 	enum isl_dim_type src_type, unsigned src_pos, unsigned n);
 
+__isl_give isl_pw_qpolynomial_fold *isl_pw_qpolynomial_fold_drop_unused_params(
+	__isl_take isl_pw_qpolynomial_fold *pwf);
+
 __isl_give isl_val *isl_pw_qpolynomial_fold_eval(
 	__isl_take isl_pw_qpolynomial_fold *pwf, __isl_take isl_point *pnt);
 
@@ -529,6 +535,9 @@ __isl_give isl_union_pw_qpolynomial *isl_union_pw_qpolynomial_subtract_domain(
 
 __isl_give isl_space *isl_union_pw_qpolynomial_get_space(
 	__isl_keep isl_union_pw_qpolynomial *upwqp);
+__isl_give isl_pw_qpolynomial_list *
+isl_union_pw_qpolynomial_get_pw_qpolynomial_list(
+	__isl_keep isl_union_pw_qpolynomial *upwqp);
 
 __isl_give isl_union_pw_qpolynomial *isl_union_pw_qpolynomial_set_dim_name(
 	__isl_take isl_union_pw_qpolynomial *upwqp,
@@ -627,6 +636,9 @@ enum isl_fold isl_union_pw_qpolynomial_fold_get_type(
 	__isl_keep isl_union_pw_qpolynomial_fold *upwf);
 __isl_give isl_space *isl_union_pw_qpolynomial_fold_get_space(
 	__isl_keep isl_union_pw_qpolynomial_fold *upwf);
+__isl_give isl_pw_qpolynomial_fold_list *
+isl_union_pw_qpolynomial_fold_get_pw_qpolynomial_fold_list(
+	__isl_keep isl_union_pw_qpolynomial_fold *upwf);
 
 __isl_give isl_union_pw_qpolynomial_fold *
 isl_union_pw_qpolynomial_fold_set_dim_name(
@@ -688,6 +700,9 @@ __isl_give isl_union_pw_qpolynomial_fold *isl_union_map_apply_union_pw_qpolynomi
 
 __isl_give isl_union_pw_qpolynomial *isl_union_pw_qpolynomial_to_polynomial(
 	__isl_take isl_union_pw_qpolynomial *upwqp, int sign);
+
+ISL_DECLARE_LIST_FN(pw_qpolynomial)
+ISL_DECLARE_LIST_FN(pw_qpolynomial_fold)
 
 #if defined(__cplusplus)
 }

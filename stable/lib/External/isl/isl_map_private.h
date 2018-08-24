@@ -393,6 +393,9 @@ isl_bool isl_set_has_rational(__isl_keep isl_set *set);
 
 __isl_give isl_basic_map *isl_basic_map_from_multi_aff2(
 	__isl_take isl_multi_aff *maff, int rational);
+__isl_give isl_map *isl_map_from_multi_aff_internal(
+	__isl_take isl_multi_aff *ma);
+__isl_give isl_map *isl_map_from_pw_aff_internal(__isl_take isl_pw_aff *pa);
 
 struct isl_mat;
 
@@ -533,9 +536,6 @@ __isl_give isl_basic_map *isl_basic_map_reduce_coefficients(
 
 __isl_give isl_basic_map *isl_basic_map_shift_div(
 	__isl_take isl_basic_map *bmap, int div, int pos, isl_int shift);
-
-__isl_give isl_basic_map_list *isl_map_get_basic_map_list(
-	__isl_keep isl_map *map);
 
 int isl_basic_set_count_upto(__isl_keep isl_basic_set *bset,
 	isl_int max, isl_int *count);

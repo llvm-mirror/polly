@@ -22,6 +22,16 @@ struct isl_stride_info {
 	isl_aff *offset;
 };
 
+/* Return the ctx to which "si" belongs.
+ */
+isl_ctx *isl_stride_info_get_ctx(__isl_keep isl_stride_info *si)
+{
+	if (!si)
+		return NULL;
+
+	return isl_val_get_ctx(si->stride);
+}
+
 /* Free "si" and return NULL.
  */
 __isl_null isl_stride_info *isl_stride_info_free(
@@ -54,6 +64,18 @@ error:
 	isl_val_free(stride);
 	isl_aff_free(offset);
 	return NULL;
+}
+
+/* Make a copy of "si" and return it.
+ */
+__isl_give isl_stride_info *isl_stride_info_copy(
+	__isl_keep isl_stride_info *si)
+{
+	if (!si)
+		return NULL;
+
+	return isl_stride_info_alloc(isl_val_copy(si->stride),
+		isl_aff_copy(si->offset));
 }
 
 /* Return the stride of "si".
@@ -247,6 +269,7 @@ static isl_stat detect_stride(__isl_take isl_constraint *c, void *user)
 			aff = isl_aff_set_coefficient_si(aff,
 							 isl_dim_div, i, 0);
 		aff = isl_aff_set_coefficient_si(aff, isl_dim_in, data->pos, 0);
+		aff = isl_aff_remove_unused_divs(aff);
 		a = isl_val_neg(a);
 		aff = isl_aff_scale_val(aff, a);
 		aff = isl_aff_scale_down_val(aff, m);

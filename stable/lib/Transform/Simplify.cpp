@@ -97,18 +97,16 @@ static isl::union_map underapproximatedAddMap(isl::union_map UMap,
     return UMap.add_map(Map);
 
   isl::map Result = isl::map::empty(PrevMap.get_space());
-  PrevMap.foreach_basic_map([&Result](isl::basic_map BMap) -> isl::stat {
-    if (isl_map_n_basic_map(Result.get()) > SimplifyMaxDisjuncts)
-      return isl::stat::error;
+  for (isl::basic_map BMap : PrevMap.get_basic_map_list()) {
+    if (Result.n_basic_map() > SimplifyMaxDisjuncts)
+      break;
     Result = Result.unite(BMap);
-    return isl::stat::ok;
-  });
-  Map.foreach_basic_map([&Result](isl::basic_map BMap) -> isl::stat {
+  }
+  for (isl::basic_map BMap : Map.get_basic_map_list()) {
     if (isl_map_n_basic_map(Result.get()) > SimplifyMaxDisjuncts)
-      return isl::stat::error;
+      break;
     Result = Result.unite(BMap);
-    return isl::stat::ok;
-  });
+  }
 
   isl::union_map UResult =
       UMap.subtract(isl::map::universe(PrevMap.get_space()));
@@ -194,8 +192,8 @@ private:
         // If all of a write's elements are overwritten, remove it.
         isl::union_map AccRelUnion = AccRel;
         if (AccRelUnion.is_subset(WillBeOverwritten)) {
-          DEBUG(dbgs() << "Removing " << MA
-                       << " which will be overwritten anyway\n");
+          LLVM_DEBUG(dbgs() << "Removing " << MA
+                            << " which will be overwritten anyway\n");
 
           Stmt.removeSingleMemoryAccess(MA);
           OverwritesRemoved++;
@@ -312,7 +310,7 @@ private:
               FutureWrites.uncurry().intersect_domain(Filter.wrap());
 
           // Iterate through the candidates.
-          Filtered.foreach_map([&, this](isl::map Map) -> isl::stat {
+          for (isl::map Map : Filtered.get_map_list()) {
             MemoryAccess *OtherMA = (MemoryAccess *)Map.get_space()
                                         .get_tuple_id(isl::dim::out)
                                         .get_user();
@@ -324,7 +322,7 @@ private:
             // elements are allowed. Verify that it only accesses allowed
             // elements. Otherwise, continue with the next candidate.
             if (!OtherAccRel.is_subset(AllowedAccesses).is_true())
-              return isl::stat::ok;
+              continue;
 
             // The combined access relation.
             // { Domain[] -> Element[] }
@@ -342,8 +340,8 @@ private:
             WritesCoalesced++;
 
             // Don't look for more candidates.
-            return isl::stat::error;
-          });
+            break;
+          }
         }
 
         // Two writes cannot be coalesced if there is another access (to some of
@@ -352,20 +350,18 @@ private:
         // elements, but any MemoryAccess that touches any of the invalidated
         // elements.
         SmallPtrSet<MemoryAccess *, 2> TouchedAccesses;
-        FutureWrites.intersect_domain(AccRelWrapped)
-            .foreach_map([&TouchedAccesses](isl::map Map) -> isl::stat {
-              MemoryAccess *MA = (MemoryAccess *)Map.get_space()
-                                     .range()
-                                     .unwrap()
-                                     .get_tuple_id(isl::dim::out)
-                                     .get_user();
-              TouchedAccesses.insert(MA);
-              return isl::stat::ok;
-            });
+        for (isl::map Map :
+             FutureWrites.intersect_domain(AccRelWrapped).get_map_list()) {
+          MemoryAccess *MA = (MemoryAccess *)Map.get_space()
+                                 .range()
+                                 .unwrap()
+                                 .get_tuple_id(isl::dim::out)
+                                 .get_user();
+          TouchedAccesses.insert(MA);
+        }
         isl::union_map NewFutureWrites =
             isl::union_map::empty(FutureWrites.get_space());
-        FutureWrites.foreach_map([&TouchedAccesses, &NewFutureWrites](
-                                     isl::map FutureWrite) -> isl::stat {
+        for (isl::map FutureWrite : FutureWrites.get_map_list()) {
           MemoryAccess *MA = (MemoryAccess *)FutureWrite.get_space()
                                  .range()
                                  .unwrap()
@@ -373,8 +369,7 @@ private:
                                  .get_user();
           if (!TouchedAccesses.count(MA))
             NewFutureWrites = NewFutureWrites.add_map(FutureWrite);
-          return isl::stat::ok;
-        });
+        }
         FutureWrites = NewFutureWrites;
 
         if (MA->isMustWrite() && !ValSet.is_null()) {
@@ -408,7 +403,7 @@ private:
           std::string Name =
               getIslCompatibleName("Val", V, ValueSets.size() - 1,
                                    std::string(), UseInstructionNames);
-          isl::id Id = give(isl_id_alloc(Ctx, Name.c_str(), V));
+          isl::id Id = isl::manage(isl_id_alloc(Ctx, Name.c_str(), V));
           Result = isl::set::universe(
               isl::space(Ctx, 0, 0).set_tuple_id(isl::dim::set, Id));
         }
@@ -453,9 +448,9 @@ private:
             isl::map AccRelStoredVal = isl::map::from_domain_and_range(
                 AccRelWrapped, makeValueSet(StoredVal));
             if (isl::union_map(AccRelStoredVal).is_subset(Known)) {
-              DEBUG(dbgs() << "Cleanup of " << MA << ":\n");
-              DEBUG(dbgs() << "      Scalar: " << *StoredVal << "\n");
-              DEBUG(dbgs() << "      AccRel: " << AccRel << "\n");
+              LLVM_DEBUG(dbgs() << "Cleanup of " << MA << ":\n");
+              LLVM_DEBUG(dbgs() << "      Scalar: " << *StoredVal << "\n");
+              LLVM_DEBUG(dbgs() << "      AccRel: " << AccRel << "\n");
 
               Stmt.removeSingleMemoryAccess(MA);
 
@@ -497,8 +492,8 @@ private:
     S->simplifySCoP(true);
     assert(NumStmtsBefore >= S->getSize());
     StmtsRemoved = NumStmtsBefore - S->getSize();
-    DEBUG(dbgs() << "Removed " << StmtsRemoved << " (of " << NumStmtsBefore
-                 << ") statements\n");
+    LLVM_DEBUG(dbgs() << "Removed " << StmtsRemoved << " (of " << NumStmtsBefore
+                      << ") statements\n");
     TotalStmtsRemoved[CallNo] += StmtsRemoved;
   }
 
@@ -516,8 +511,9 @@ private:
         if (!AccRel.is_empty().is_true())
           continue;
 
-        DEBUG(dbgs() << "Removing " << MA
-                     << " because it's a partial access that never occurs\n");
+        LLVM_DEBUG(
+            dbgs() << "Removing " << MA
+                   << " because it's a partial access that never occurs\n");
         DeferredRemove.push_back(MA);
       }
 
@@ -548,7 +544,8 @@ private:
     for (MemoryAccess *MA : AllMAs) {
       if (UsedMA.count(MA))
         continue;
-      DEBUG(dbgs() << "Removing " << MA << " because its value is not used\n");
+      LLVM_DEBUG(dbgs() << "Removing " << MA
+                        << " because its value is not used\n");
       ScopStmt *Stmt = MA->getStatement();
       Stmt->removeSingleMemoryAccess(MA);
 
@@ -569,8 +566,8 @@ private:
       for (Instruction *Inst : AllInsts) {
         auto It = UsedInsts.find({&Stmt, Inst});
         if (It == UsedInsts.end()) {
-          DEBUG(dbgs() << "Removing "; Inst->print(dbgs());
-                dbgs() << " because it is not used\n");
+          LLVM_DEBUG(dbgs() << "Removing "; Inst->print(dbgs());
+                     dbgs() << " because it is not used\n");
           DeadInstructionsRemoved++;
           TotalDeadInstructionsRemoved[CallNo]++;
           continue;
@@ -636,29 +633,29 @@ public:
     this->S = &S;
     ScopsProcessed[CallNo]++;
 
-    DEBUG(dbgs() << "Removing partial writes that never happen...\n");
+    LLVM_DEBUG(dbgs() << "Removing partial writes that never happen...\n");
     removeEmptyPartialAccesses();
 
-    DEBUG(dbgs() << "Removing overwrites...\n");
+    LLVM_DEBUG(dbgs() << "Removing overwrites...\n");
     removeOverwrites();
 
-    DEBUG(dbgs() << "Coalesce partial writes...\n");
+    LLVM_DEBUG(dbgs() << "Coalesce partial writes...\n");
     coalesceWrites();
 
-    DEBUG(dbgs() << "Removing redundant writes...\n");
+    LLVM_DEBUG(dbgs() << "Removing redundant writes...\n");
     removeRedundantWrites();
 
-    DEBUG(dbgs() << "Cleanup unused accesses...\n");
+    LLVM_DEBUG(dbgs() << "Cleanup unused accesses...\n");
     LoopInfo *LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
     markAndSweep(LI);
 
-    DEBUG(dbgs() << "Removing statements without side effects...\n");
+    LLVM_DEBUG(dbgs() << "Removing statements without side effects...\n");
     removeUnnecessaryStmts();
 
     if (isModified())
       ScopsModified[CallNo]++;
-    DEBUG(dbgs() << "\nFinal Scop:\n");
-    DEBUG(dbgs() << S);
+    LLVM_DEBUG(dbgs() << "\nFinal Scop:\n");
+    LLVM_DEBUG(dbgs() << S);
 
     auto ScopStats = S.getStatistics();
     NumValueWrites[CallNo] += ScopStats.NumValueWrites;

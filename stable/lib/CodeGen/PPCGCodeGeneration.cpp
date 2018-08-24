@@ -262,7 +262,8 @@ static MustKillsInfo computeMustKillsInfo(const Scop &S) {
 
     isl::schedule KillSchedule = isl::schedule::from_domain(KillStmtDomain);
     if (Info.KillsSchedule)
-      Info.KillsSchedule = Info.KillsSchedule.set(KillSchedule);
+      Info.KillsSchedule = isl::manage(
+          isl_schedule_set(Info.KillsSchedule.release(), KillSchedule.copy()));
     else
       Info.KillsSchedule = KillSchedule;
   }
@@ -578,8 +579,9 @@ private:
 
   /// Insert function calls to retrieve the SPIR group/local ids.
   ///
-  /// @param The kernel to generate the function calls for.
-  void insertKernelCallsSPIR(ppcg_kernel *Kernel);
+  /// @param Kernel The kernel to generate the function calls for.
+  /// @param SizeTypeIs64Bit Whether size_t of the openCl device is 64bit.
+  void insertKernelCallsSPIR(ppcg_kernel *Kernel, bool SizeTypeIs64bit);
 
   /// Setup the creation of functions referenced by the GPU kernel.
   ///
@@ -1288,7 +1290,7 @@ void GPUNodeBuilder::createUser(__isl_take isl_ast_node *UserStmt) {
 }
 
 void GPUNodeBuilder::createFor(__isl_take isl_ast_node *Node) {
-  createForSequential(Node, false);
+  createForSequential(isl::manage(Node), false);
 }
 
 void GPUNodeBuilder::createKernelCopy(ppcg_kernel_stmt *KernelStmt) {
@@ -1398,7 +1400,7 @@ const std::map<std::string, std::string> IntrinsicToLibdeviceFunc = {
     {"llvm.powi.f64", "powi"},
     {"llvm.powi.f32", "powif"}};
 
-/// Return the corresponding CUDA libdevice function name for @p F.
+/// Return the corresponding CUDA libdevice function name @p Name.
 /// Note that this function will try to convert instrinsics in the list
 /// IntrinsicToLibdeviceFunc into libdevice functions.
 /// This is because some intrinsics such as `exp`
@@ -1407,17 +1409,13 @@ const std::map<std::string, std::string> IntrinsicToLibdeviceFunc = {
 /// so that we use intrinsics whenever possible.
 ///
 /// Return "" if we are not compiling for CUDA.
-std::string getCUDALibDeviceFuntion(Function *F) {
-  const std::string FnName = [&] {
-    auto It = IntrinsicToLibdeviceFunc.find(F->getName());
-    if (It != IntrinsicToLibdeviceFunc.end())
-      return It->second;
+std::string getCUDALibDeviceFuntion(StringRef Name) {
+  auto It = IntrinsicToLibdeviceFunc.find(Name);
+  if (It != IntrinsicToLibdeviceFunc.end())
+    return getCUDALibDeviceFuntion(It->second);
 
-    return std::string(F->getName());
-  }();
-
-  if (CUDALibDeviceFunctions.count(FnName))
-    return "__nv_" + FnName;
+  if (CUDALibDeviceFunctions.count(Name))
+    return ("__nv_" + Name).str();
 
   return "";
 }
@@ -1430,7 +1428,7 @@ static bool isValidFunctionInKernel(llvm::Function *F, bool AllowLibDevice) {
   // "llvm.copysign".
   const StringRef Name = F->getName();
 
-  if (AllowLibDevice && getCUDALibDeviceFuntion(F).length() > 0)
+  if (AllowLibDevice && getCUDALibDeviceFuntion(Name).length() > 0)
     return true;
 
   return F->isIntrinsic() &&
@@ -1563,12 +1561,14 @@ void GPUNodeBuilder::clearScalarEvolution(Function *F) {
 }
 
 void GPUNodeBuilder::clearLoops(Function *F) {
+  SmallSet<Loop *, 1> WorkList;
   for (BasicBlock &BB : *F) {
     Loop *L = LI.getLoopFor(&BB);
     if (L)
-      SE.forgetLoop(L);
-    LI.removeBlock(&BB);
+      WorkList.insert(L);
   }
+  for (auto *L : WorkList)
+    LI.erase(L);
 }
 
 std::tuple<Value *, Value *> GPUNodeBuilder::getGridSizes(ppcg_kernel *Kernel) {
@@ -2099,7 +2099,8 @@ void GPUNodeBuilder::insertKernelIntrinsics(ppcg_kernel *Kernel) {
   }
 }
 
-void GPUNodeBuilder::insertKernelCallsSPIR(ppcg_kernel *Kernel) {
+void GPUNodeBuilder::insertKernelCallsSPIR(ppcg_kernel *Kernel,
+                                           bool SizeTypeIs64bit) {
   const char *GroupName[3] = {"__gen_ocl_get_group_id0",
                               "__gen_ocl_get_group_id1",
                               "__gen_ocl_get_group_id2"};
@@ -2107,8 +2108,11 @@ void GPUNodeBuilder::insertKernelCallsSPIR(ppcg_kernel *Kernel) {
   const char *LocalName[3] = {"__gen_ocl_get_local_id0",
                               "__gen_ocl_get_local_id1",
                               "__gen_ocl_get_local_id2"};
+  IntegerType *SizeT =
+      SizeTypeIs64bit ? Builder.getInt64Ty() : Builder.getInt32Ty();
 
-  auto createFunc = [this](const char *Name, __isl_take isl_id *Id) mutable {
+  auto createFunc = [this](const char *Name, __isl_take isl_id *Id,
+                           IntegerType *SizeT) mutable {
     Module *M = Builder.GetInsertBlock()->getParent()->getParent();
     Function *FN = M->getFunction(Name);
 
@@ -2116,22 +2120,23 @@ void GPUNodeBuilder::insertKernelCallsSPIR(ppcg_kernel *Kernel) {
     if (!FN) {
       GlobalValue::LinkageTypes Linkage = Function::ExternalLinkage;
       std::vector<Type *> Args;
-      FunctionType *Ty = FunctionType::get(Builder.getInt32Ty(), Args, false);
+      FunctionType *Ty = FunctionType::get(SizeT, Args, false);
       FN = Function::Create(Ty, Linkage, Name, M);
       FN->setCallingConv(CallingConv::SPIR_FUNC);
     }
 
     Value *Val = Builder.CreateCall(FN, {});
-    Val = Builder.CreateIntCast(Val, Builder.getInt64Ty(), false, Name);
+    if (SizeT == Builder.getInt32Ty())
+      Val = Builder.CreateIntCast(Val, Builder.getInt64Ty(), false, Name);
     IDToValue[Id] = Val;
     KernelIDs.insert(std::unique_ptr<isl_id, IslIdDeleter>(Id));
   };
 
   for (int i = 0; i < Kernel->n_grid; ++i)
-    createFunc(GroupName[i], isl_id_list_get_id(Kernel->block_ids, i));
+    createFunc(GroupName[i], isl_id_list_get_id(Kernel->block_ids, i), SizeT);
 
   for (int i = 0; i < Kernel->n_block; ++i)
-    createFunc(LocalName[i], isl_id_list_get_id(Kernel->thread_ids, i));
+    createFunc(LocalName[i], isl_id_list_get_id(Kernel->thread_ids, i), SizeT);
 }
 
 void GPUNodeBuilder::prepareKernelArguments(ppcg_kernel *Kernel, Function *FN) {
@@ -2205,7 +2210,7 @@ void GPUNodeBuilder::finalizeKernelArguments(ppcg_kernel *Kernel) {
     /// memory store or at least before each kernel barrier.
     if (Kernel->n_block != 0 || Kernel->n_grid != 0) {
       BuildSuccessful = 0;
-      DEBUG(
+      LLVM_DEBUG(
           dbgs() << getUniqueScopName(&S)
                  << " has a store to a scalar value that"
                     " would be undefined to run in parallel. Bailing out.\n";);
@@ -2309,8 +2314,10 @@ void GPUNodeBuilder::createKernelFunction(
     insertKernelIntrinsics(Kernel);
     break;
   case GPUArch::SPIR32:
+    insertKernelCallsSPIR(Kernel, false);
+    break;
   case GPUArch::SPIR64:
-    insertKernelCallsSPIR(Kernel);
+    insertKernelCallsSPIR(Kernel, true);
     break;
   }
 }
@@ -2369,8 +2376,9 @@ std::string GPUNodeBuilder::createKernelASM() {
 
   PM.add(createTargetTransformInfoWrapperPass(TargetM->getTargetIRAnalysis()));
 
-  if (TargetM->addPassesToEmitFile(
-          PM, ASMStream, TargetMachine::CGFT_AssemblyFile, true /* verify */)) {
+  if (TargetM->addPassesToEmitFile(PM, ASMStream, nullptr,
+                                   TargetMachine::CGFT_AssemblyFile,
+                                   true /* verify */)) {
     errs() << "The target does not support generation of this file type!\n";
     return "";
   }
@@ -2386,7 +2394,7 @@ bool GPUNodeBuilder::requiresCUDALibDevice() {
     if (!F.isDeclaration())
       continue;
 
-    const std::string CUDALibDeviceFunc = getCUDALibDeviceFuntion(&F);
+    const std::string CUDALibDeviceFunc = getCUDALibDeviceFuntion(F.getName());
     if (CUDALibDeviceFunc.length() != 0) {
       // We need to handle the case where a module looks like this:
       // @expf(..)
@@ -2440,10 +2448,10 @@ void GPUNodeBuilder::addCUDALibDevice() {
 std::string GPUNodeBuilder::finalizeKernelFunction() {
 
   if (verifyModule(*GPUModule)) {
-    DEBUG(dbgs() << "verifyModule failed on module:\n";
-          GPUModule->print(dbgs(), nullptr); dbgs() << "\n";);
-    DEBUG(dbgs() << "verifyModule Error:\n";
-          verifyModule(*GPUModule, &dbgs()););
+    LLVM_DEBUG(dbgs() << "verifyModule failed on module:\n";
+               GPUModule->print(dbgs(), nullptr); dbgs() << "\n";);
+    LLVM_DEBUG(dbgs() << "verifyModule Error:\n";
+               verifyModule(*GPUModule, &dbgs()););
 
     if (FailOnVerifyModuleFailure)
       llvm_unreachable("VerifyModule failed.");
@@ -2730,8 +2738,8 @@ public:
     PPCGScop->tagged_must_writes = getTaggedMustWrites();
     PPCGScop->must_writes = S->getMustWrites().release();
     PPCGScop->live_out = nullptr;
-    PPCGScop->tagged_must_kills = KillsInfo.TaggedMustKills.take();
-    PPCGScop->must_kills = KillsInfo.MustKills.take();
+    PPCGScop->tagged_must_kills = KillsInfo.TaggedMustKills.release();
+    PPCGScop->must_kills = KillsInfo.MustKills.release();
 
     PPCGScop->tagger = nullptr;
     PPCGScop->independence =
@@ -2747,7 +2755,7 @@ public:
     // If we have something non-trivial to kill, add it to the schedule
     if (KillsInfo.KillsSchedule.get())
       PPCGScop->schedule = isl_schedule_sequence(
-          PPCGScop->schedule, KillsInfo.KillsSchedule.take());
+          PPCGScop->schedule, KillsInfo.KillsSchedule.release());
 
     PPCGScop->names = getNames();
     PPCGScop->pet = nullptr;
@@ -3156,7 +3164,7 @@ public:
     auto *Options = isl_ast_print_options_alloc(S->getIslCtx().get());
     P = isl_ast_node_print(Kernel->tree, P, Options);
     char *String = isl_printer_get_str(P);
-    printf("%s\n", String);
+    outs() << String << "\n";
     free(String);
     isl_printer_free(P);
   }
@@ -3177,13 +3185,13 @@ public:
         isl_ast_print_options_set_print_user(Options, printHostUser, &Data);
     P = isl_ast_node_print(Tree, P, Options);
     char *String = isl_printer_get_str(P);
-    printf("# host\n");
-    printf("%s\n", String);
+    outs() << "# host\n";
+    outs() << String << "\n";
     free(String);
     isl_printer_free(P);
 
     for (auto Kernel : Data.Kernels) {
-      printf("# kernel%d\n", Kernel->id);
+      outs() << "# kernel" << Kernel->id << "\n";
       printKernel(Kernel);
     }
   }
@@ -3230,8 +3238,8 @@ public:
 
     if (!has_permutable || has_permutable < 0) {
       Schedule = isl_schedule_free(Schedule);
-      DEBUG(dbgs() << getUniqueScopName(S)
-                   << " does not have permutable bands. Bailing out\n";);
+      LLVM_DEBUG(dbgs() << getUniqueScopName(S)
+                        << " does not have permutable bands. Bailing out\n";);
     } else {
       const bool CreateTransferToFromDevice = !PollyManagedMemory;
       Schedule = map_to_device(PPCGGen, Schedule, CreateTransferToFromDevice);
@@ -3248,17 +3256,17 @@ public:
       else
         P = isl_printer_print_str(P, "No schedule found\n");
 
-      printf("%s\n", isl_printer_get_str(P));
+      outs() << isl_printer_get_str(P) << "\n";
       isl_printer_free(P);
     }
 
     if (DumpCode) {
-      printf("Code\n");
-      printf("====\n");
+      outs() << "Code\n";
+      outs() << "====\n";
       if (PPCGGen->tree)
         printGPUTree(PPCGGen->tree, PPCGProg);
       else
-        printf("No code generated\n");
+        outs() << "No code generated\n";
     }
 
     isl_schedule_free(Schedule);
@@ -3409,8 +3417,8 @@ public:
         // Look for (<func-type>*) among operands of Inst
         if (auto PtrTy = dyn_cast<PointerType>(Op->getType())) {
           if (isa<FunctionType>(PtrTy->getElementType())) {
-            DEBUG(dbgs() << Inst
-                         << " has illegal use of function in kernel.\n");
+            LLVM_DEBUG(dbgs()
+                       << Inst << " has illegal use of function in kernel.\n");
             return true;
           }
         }
@@ -3488,9 +3496,9 @@ public:
       auto *SplitBBTerm = Builder.GetInsertBlock()->getTerminator();
       SplitBBTerm->setOperand(0, FalseI1);
 
-      DEBUG(dbgs() << "preloading invariant loads failed in function: " +
-                          S->getFunction().getName() +
-                          " | Scop Region: " + S->getNameStr());
+      LLVM_DEBUG(dbgs() << "preloading invariant loads failed in function: " +
+                               S->getFunction().getName() +
+                               " | Scop Region: " + S->getNameStr());
       // adjust the dominator tree accordingly.
       auto *ExitingBlock = StartBlock->getUniqueSuccessor();
       assert(ExitingBlock);
@@ -3550,8 +3558,8 @@ public:
     DL = &S->getRegion().getEntry()->getModule()->getDataLayout();
     RI = &getAnalysis<RegionInfoPass>().getRegionInfo();
 
-    DEBUG(dbgs() << "PPCGCodeGen running on : " << getUniqueScopName(S)
-                 << " | loop depth: " << S->getMaxLoopDepth() << "\n");
+    LLVM_DEBUG(dbgs() << "PPCGCodeGen running on : " << getUniqueScopName(S)
+                      << " | loop depth: " << S->getMaxLoopDepth() << "\n");
 
     // We currently do not support functions other than intrinsics inside
     // kernels, as code generation will need to offload function calls to the
@@ -3560,7 +3568,7 @@ public:
     // address of an intrinsic function to send to the kernel.
     if (containsInvalidKernelFunction(CurrentScop,
                                       Architecture == GPUArch::NVPTX64)) {
-      DEBUG(
+      LLVM_DEBUG(
           dbgs() << getUniqueScopName(S)
                  << " contains function which cannot be materialised in a GPU "
                     "kernel. Bailing out.\n";);
@@ -3575,8 +3583,8 @@ public:
       generateCode(isl_ast_node_copy(PPCGGen->tree), PPCGProg);
       CurrentScop.markAsToBeSkipped();
     } else {
-      DEBUG(dbgs() << getUniqueScopName(S)
-                   << " has empty PPCGGen->tree. Bailing out.\n");
+      LLVM_DEBUG(dbgs() << getUniqueScopName(S)
+                        << " has empty PPCGGen->tree. Bailing out.\n");
     }
 
     freeOptions(PPCGScop);

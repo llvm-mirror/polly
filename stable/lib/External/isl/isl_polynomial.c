@@ -28,6 +28,11 @@
 #include <isl_val_private.h>
 #include <isl_config.h>
 
+#undef BASE
+#define BASE pw_qpolynomial
+
+#include <isl_list_templ.c>
+
 static unsigned pos(__isl_keep isl_space *dim, enum isl_dim_type type)
 {
 	switch (type) {
@@ -2958,12 +2963,8 @@ __isl_give isl_pw_qpolynomial *isl_pw_qpolynomial_from_qpolynomial(
 #include <isl_pw_templ.c>
 #include <isl_pw_eval.c>
 
-#undef UNION
-#define UNION isl_union_pw_qpolynomial
-#undef PART
-#define PART isl_pw_qpolynomial
-#undef PARTS
-#define PARTS pw_qpolynomial
+#undef BASE
+#define BASE pw_qpolynomial
 
 #include <isl_union_single.c>
 #include <isl_union_eval.c>
@@ -4225,46 +4226,13 @@ __isl_give isl_union_pw_qpolynomial *isl_union_pw_qpolynomial_mul(
 						&isl_pw_qpolynomial_mul);
 }
 
-/* Reorder the columns of the given div definitions according to the
- * given reordering.
- */
-static __isl_give isl_mat *reorder_divs(__isl_take isl_mat *div,
-	__isl_take isl_reordering *r)
-{
-	int i, j;
-	isl_mat *mat;
-	int extra;
-
-	if (!div || !r)
-		goto error;
-
-	extra = isl_space_dim(r->dim, isl_dim_all) + div->n_row - r->len;
-	mat = isl_mat_alloc(div->ctx, div->n_row, div->n_col + extra);
-	if (!mat)
-		goto error;
-
-	for (i = 0; i < div->n_row; ++i) {
-		isl_seq_cpy(mat->row[i], div->row[i], 2);
-		isl_seq_clr(mat->row[i] + 2, mat->n_col - 2);
-		for (j = 0; j < r->len; ++j)
-			isl_int_set(mat->row[i][2 + r->pos[j]],
-				    div->row[i][2 + j]);
-	}
-
-	isl_reordering_free(r);
-	isl_mat_free(div);
-	return mat;
-error:
-	isl_reordering_free(r);
-	isl_mat_free(div);
-	return NULL;
-}
-
 /* Reorder the dimension of "qp" according to the given reordering.
  */
 __isl_give isl_qpolynomial *isl_qpolynomial_realign_domain(
 	__isl_take isl_qpolynomial *qp, __isl_take isl_reordering *r)
 {
+	isl_space *space;
+
 	qp = isl_qpolynomial_cow(qp);
 	if (!qp)
 		goto error;
@@ -4273,7 +4241,7 @@ __isl_give isl_qpolynomial *isl_qpolynomial_realign_domain(
 	if (!r)
 		goto error;
 
-	qp->div = reorder_divs(qp->div, isl_reordering_copy(r));
+	qp->div = isl_local_reorder(qp->div, isl_reordering_copy(r));
 	if (!qp->div)
 		goto error;
 
@@ -4281,7 +4249,8 @@ __isl_give isl_qpolynomial *isl_qpolynomial_realign_domain(
 	if (!qp->upoly)
 		goto error;
 
-	qp = isl_qpolynomial_reset_domain_space(qp, isl_space_copy(r->dim));
+	space = isl_reordering_get_space(r);
+	qp = isl_qpolynomial_reset_domain_space(qp, space);
 
 	isl_reordering_free(r);
 	return qp;
@@ -4305,10 +4274,6 @@ __isl_give isl_qpolynomial *isl_qpolynomial_align_params(
 	if (!equal_params) {
 		isl_reordering *exp;
 
-		model = isl_space_drop_dims(model, isl_dim_in,
-					0, isl_space_dim(model, isl_dim_in));
-		model = isl_space_drop_dims(model, isl_dim_out,
-					0, isl_space_dim(model, isl_dim_out));
 		exp = isl_parameter_alignment_reordering(qp->dim, model);
 		exp = isl_reordering_extend_space(exp,
 					isl_qpolynomial_get_domain_space(qp));
@@ -4412,7 +4377,7 @@ static isl_stat set_div(__isl_take isl_set *set,
 error:
 	isl_set_free(set);
 	isl_qpolynomial_free(qp);
-	return -1;
+	return isl_stat_error;
 }
 
 /* Split the domain "set" such that integer division "div"

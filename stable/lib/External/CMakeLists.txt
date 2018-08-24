@@ -179,6 +179,7 @@ if (POLLY_BUNDLED_ISL)
   set (ISL_FILES
     isl/basis_reduction_tab.c
     isl/isl_aff.c
+    isl/isl_aff_map.c
     isl/isl_affine_hull.c
     isl/isl_arg.c
     isl/isl_ast_build.c
@@ -189,6 +190,7 @@ if (POLLY_BUNDLED_ISL)
     isl/isl_bernstein.c
     isl/isl_blk.c
     isl/isl_bound.c
+    isl/isl_box.c
     isl/isl_coalesce.c
     isl/isl_constraint.c
     isl/isl_convex_hull.c

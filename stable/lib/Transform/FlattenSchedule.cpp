@@ -18,6 +18,7 @@
 #include "polly/ScopInfo.h"
 #include "polly/ScopPass.h"
 #include "polly/Support/ISLOStream.h"
+#include "polly/Support/ISLTools.h"
 #define DEBUG_TYPE "polly-flatten-schedule"
 
 using namespace polly;
@@ -30,10 +31,8 @@ namespace {
 /// Prints the schedule for each statements on a new line.
 void printSchedule(raw_ostream &OS, const isl::union_map &Schedule,
                    int indent) {
-  Schedule.foreach_map([&OS, indent](isl::map Map) -> isl::stat {
+  for (isl::map Map : Schedule.get_map_list())
     OS.indent(indent) << Map << "\n";
-    return isl::stat::ok;
-  });
 }
 
 /// Flatten the schedule stored in an polly::Scop.
@@ -59,23 +58,23 @@ public:
     // OldSchedule.
     IslCtx = S.getSharedIslCtx();
 
-    DEBUG(dbgs() << "Going to flatten old schedule:\n");
+    LLVM_DEBUG(dbgs() << "Going to flatten old schedule:\n");
     OldSchedule = S.getSchedule();
-    DEBUG(printSchedule(dbgs(), OldSchedule, 2));
+    LLVM_DEBUG(printSchedule(dbgs(), OldSchedule, 2));
 
     auto Domains = S.getDomains();
     auto RestrictedOldSchedule = OldSchedule.intersect_domain(Domains);
-    DEBUG(dbgs() << "Old schedule with domains:\n");
-    DEBUG(printSchedule(dbgs(), RestrictedOldSchedule, 2));
+    LLVM_DEBUG(dbgs() << "Old schedule with domains:\n");
+    LLVM_DEBUG(printSchedule(dbgs(), RestrictedOldSchedule, 2));
 
     auto NewSchedule = flattenSchedule(RestrictedOldSchedule);
 
-    DEBUG(dbgs() << "Flattened new schedule:\n");
-    DEBUG(printSchedule(dbgs(), NewSchedule, 2));
+    LLVM_DEBUG(dbgs() << "Flattened new schedule:\n");
+    LLVM_DEBUG(printSchedule(dbgs(), NewSchedule, 2));
 
     NewSchedule = NewSchedule.gist_domain(Domains);
-    DEBUG(dbgs() << "Gisted, flattened new schedule:\n");
-    DEBUG(printSchedule(dbgs(), NewSchedule, 2));
+    LLVM_DEBUG(dbgs() << "Gisted, flattened new schedule:\n");
+    LLVM_DEBUG(printSchedule(dbgs(), NewSchedule, 2));
 
     S.setSchedule(NewSchedule);
     return false;

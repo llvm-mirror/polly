@@ -1510,6 +1510,7 @@ static enum isl_change can_wrap_in_facet(int i, int j, int k,
 
 	isl_seq_cpy(bound->el, info[i].bmap->ineq[k], 1 + total);
 	isl_int_add_ui(bound->el[0], bound->el[0], 1);
+	isl_seq_normalize(ctx, bound->el, 1 + total);
 
 	isl_seq_cpy(wraps.mat->row[0], bound->el, 1 + total);
 	wraps.mat->n_row = 1;
@@ -2393,7 +2394,7 @@ static isl_stat shift_div(struct isl_coalesce_info *info, int div,
  *
  *	c + f + m a = 0
  *
- * The integer division expression is then of the form
+ * The integer division expression is then typically of the form
  *
  *	a = floor((-f - c')/m)
  *
@@ -2411,11 +2412,12 @@ static isl_stat shift_div(struct isl_coalesce_info *info, int div,
  *	a' = (-f - (c mod m))/m = floor((-f)/m)
  *
  * because a' is an integer and 0 <= (c mod m) < m.
- * The constant term of a' can therefore be zeroed out.
+ * The constant term of a' can therefore be zeroed out,
+ * but only if the integer division expression is of the expected form.
  */
 static isl_stat normalize_stride_div(struct isl_coalesce_info *info, int div)
 {
-	isl_bool defined;
+	isl_bool defined, valid;
 	isl_stat r;
 	isl_constraint *c;
 	isl_int shift, stride;
@@ -2428,6 +2430,7 @@ static isl_stat normalize_stride_div(struct isl_coalesce_info *info, int div)
 		return isl_stat_ok;
 	if (!c)
 		return isl_stat_error;
+	valid = isl_constraint_is_div_equality(c, div);
 	isl_int_init(shift);
 	isl_int_init(stride);
 	isl_constraint_get_constant(c, &shift);
@@ -2437,8 +2440,10 @@ static isl_stat normalize_stride_div(struct isl_coalesce_info *info, int div)
 	isl_int_clear(stride);
 	isl_int_clear(shift);
 	isl_constraint_free(c);
-	if (r < 0)
+	if (r < 0 || valid < 0)
 		return isl_stat_error;
+	if (!valid)
+		return isl_stat_ok;
 	info->bmap = isl_basic_map_set_div_expr_constant_num_si_inplace(
 							    info->bmap, div, 0);
 	if (!info->bmap)
@@ -2699,9 +2704,9 @@ static isl_bool same_divs(__isl_keep isl_basic_map *bmap1,
 	total = isl_basic_map_total_dim(bmap1);
 	for (i = 0; i < bmap1->n_div; ++i)
 		if (!isl_seq_eq(bmap1->div[i], bmap2->div[i], 2 + total))
-			return 0;
+			return isl_bool_false;
 
-	return 1;
+	return isl_bool_true;
 }
 
 /* Assuming that "tab" contains the equality constraints and
@@ -3130,7 +3135,7 @@ static enum isl_change coalesce_after_aligning_divs(
 	__isl_keep isl_basic_map *bmap_i, int i, int j,
 	struct isl_coalesce_info *info)
 {
-	int known;
+	isl_bool known;
 	isl_mat *div_i, *div_j, *div;
 	int *exp1 = NULL;
 	int *exp2 = NULL;
@@ -3138,8 +3143,10 @@ static enum isl_change coalesce_after_aligning_divs(
 	enum isl_change change;
 
 	known = isl_basic_map_divs_known(bmap_i);
-	if (known < 0 || !known)
-		return known;
+	if (known < 0)
+		return isl_change_error;
+	if (!known)
+		return isl_change_none;
 
 	ctx = isl_basic_map_get_ctx(bmap_i);
 
@@ -3677,12 +3684,20 @@ static enum isl_change check_coalesce_eq(int i, int j,
  * an obvious subset of the other or if the extra integer divisions
  * of one basic map can be simplified away using the extra equalities
  * of the other basic map.
+ *
+ * Note that trying to coalesce pairs of disjuncts with the same
+ * number, but different local variables may drop the explicit
+ * representation of some of these local variables.
+ * This operation is therefore not performed when
+ * the "coalesce_preserve_locals" option is set.
  */
 static enum isl_change coalesce_pair(int i, int j,
 	struct isl_coalesce_info *info)
 {
+	int preserve;
 	isl_bool same;
 	enum isl_change change;
+	isl_ctx *ctx;
 
 	if (harmonize_divs(&info[i], &info[j]) < 0)
 		return isl_change_error;
@@ -3692,7 +3707,9 @@ static enum isl_change coalesce_pair(int i, int j,
 	if (same)
 		return coalesce_local_pair(i, j, info);
 
-	if (info[i].bmap->n_div == info[j].bmap->n_div) {
+	ctx = isl_basic_map_get_ctx(info[i].bmap);
+	preserve = isl_options_get_coalesce_preserve_locals(ctx);
+	if (!preserve && info[i].bmap->n_div == info[j].bmap->n_div) {
 		change = coalesce_local_pair(i, j, info);
 		if (change != isl_change_none)
 			return change;

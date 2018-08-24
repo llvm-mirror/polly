@@ -1019,76 +1019,85 @@ static int valid_dim_type(enum isl_dim_type type)
  * If we are inserting parameters, then they are also inserted in
  * any nested spaces.
  */
-__isl_give isl_space *isl_space_insert_dims(__isl_take isl_space *dim,
+__isl_give isl_space *isl_space_insert_dims(__isl_take isl_space *space,
 	enum isl_dim_type type, unsigned pos, unsigned n)
 {
+	isl_ctx *ctx;
 	isl_id **ids = NULL;
+	unsigned total;
 
-	if (!dim)
+	if (!space)
 		return NULL;
 	if (n == 0)
-		return isl_space_reset(dim, type);
+		return isl_space_reset(space, type);
 
+	ctx = isl_space_get_ctx(space);
 	if (!valid_dim_type(type))
-		isl_die(dim->ctx, isl_error_invalid,
+		isl_die(ctx, isl_error_invalid,
 			"cannot insert dimensions of specified type",
 			goto error);
 
-	isl_assert(dim->ctx, pos <= isl_space_dim(dim, type), goto error);
+	total = isl_space_dim(space, isl_dim_all);
+	if (total + n < total)
+		isl_die(ctx, isl_error_invalid,
+			"overflow in total number of dimensions",
+			return isl_space_free(space));
+	isl_assert(ctx, pos <= isl_space_dim(space, type), goto error);
 
-	dim = isl_space_cow(dim);
-	if (!dim)
+	space = isl_space_cow(space);
+	if (!space)
 		return NULL;
 
-	if (dim->ids) {
+	if (space->ids) {
 		enum isl_dim_type t, o = isl_dim_param;
 		int off;
 		int s[3];
-		ids = isl_calloc_array(dim->ctx, isl_id *,
-				     dim->nparam + dim->n_in + dim->n_out + n);
+		ids = isl_calloc_array(ctx, isl_id *,
+			     space->nparam + space->n_in + space->n_out + n);
 		if (!ids)
 			goto error;
 		off = 0;
-		s[isl_dim_param - o] = dim->nparam;
-		s[isl_dim_in - o] = dim->n_in;
-		s[isl_dim_out - o] = dim->n_out;
+		s[isl_dim_param - o] = space->nparam;
+		s[isl_dim_in - o] = space->n_in;
+		s[isl_dim_out - o] = space->n_out;
 		for (t = isl_dim_param; t <= isl_dim_out; ++t) {
 			if (t != type) {
-				get_ids(dim, t, 0, s[t - o], ids + off);
+				get_ids(space, t, 0, s[t - o], ids + off);
 				off += s[t - o];
 			} else {
-				get_ids(dim, t, 0, pos, ids + off);
+				get_ids(space, t, 0, pos, ids + off);
 				off += pos + n;
-				get_ids(dim, t, pos, s[t - o] - pos, ids + off);
+				get_ids(space, t, pos, s[t - o] - pos,
+					ids + off);
 				off += s[t - o] - pos;
 			}
 		}
-		free(dim->ids);
-		dim->ids = ids;
-		dim->n_id = dim->nparam + dim->n_in + dim->n_out + n;
+		free(space->ids);
+		space->ids = ids;
+		space->n_id = space->nparam + space->n_in + space->n_out + n;
 	}
 	switch (type) {
-	case isl_dim_param:	dim->nparam += n; break;
-	case isl_dim_in:	dim->n_in += n; break;
-	case isl_dim_out:	dim->n_out += n; break;
+	case isl_dim_param:	space->nparam += n; break;
+	case isl_dim_in:	space->n_in += n; break;
+	case isl_dim_out:	space->n_out += n; break;
 	default:		;
 	}
-	dim = isl_space_reset(dim, type);
+	space = isl_space_reset(space, type);
 
 	if (type == isl_dim_param) {
-		if (dim && dim->nested[0] &&
-		    !(dim->nested[0] = isl_space_insert_dims(dim->nested[0],
+		if (space && space->nested[0] &&
+		    !(space->nested[0] = isl_space_insert_dims(space->nested[0],
 						    isl_dim_param, pos, n)))
 			goto error;
-		if (dim && dim->nested[1] &&
-		    !(dim->nested[1] = isl_space_insert_dims(dim->nested[1],
+		if (space && space->nested[1] &&
+		    !(space->nested[1] = isl_space_insert_dims(space->nested[1],
 						    isl_dim_param, pos, n)))
 			goto error;
 	}
 
-	return dim;
+	return space;
 error:
-	isl_space_free(dim);
+	isl_space_free(space);
 	return NULL;
 }
 
@@ -2546,35 +2555,31 @@ isl_stat isl_space_check_named_params(__isl_keep isl_space *space)
 		return isl_stat_error;
 	if (!named)
 		isl_die(isl_space_get_ctx(space), isl_error_invalid,
-			"unaligned unnamed parameters", return isl_stat_error);
+			"unexpected unnamed parameters", return isl_stat_error);
 
 	return isl_stat_ok;
 }
 
-/* Align the initial parameters of dim1 to match the order in dim2.
+/* Align the initial parameters of space1 to match the order in space2.
  */
-__isl_give isl_space *isl_space_align_params(__isl_take isl_space *dim1,
-	__isl_take isl_space *dim2)
+__isl_give isl_space *isl_space_align_params(__isl_take isl_space *space1,
+	__isl_take isl_space *space2)
 {
 	isl_reordering *exp;
 
-	if (!isl_space_has_named_params(dim1) || !isl_space_has_named_params(dim2))
-		isl_die(isl_space_get_ctx(dim1), isl_error_invalid,
-			"parameter alignment requires named parameters",
-			goto error);
+	if (isl_space_check_named_params(space1) < 0 ||
+	    isl_space_check_named_params(space2) < 0)
+		goto error;
 
-	dim2 = isl_space_params(dim2);
-	exp = isl_parameter_alignment_reordering(dim1, dim2);
-	exp = isl_reordering_extend_space(exp, dim1);
-	isl_space_free(dim2);
-	if (!exp)
-		return NULL;
-	dim1 = isl_space_copy(exp->dim);
+	exp = isl_parameter_alignment_reordering(space1, space2);
+	exp = isl_reordering_extend_space(exp, space1);
+	isl_space_free(space2);
+	space1 = isl_reordering_get_space(exp);
 	isl_reordering_free(exp);
-	return dim1;
+	return space1;
 error:
-	isl_space_free(dim1);
-	isl_space_free(dim2);
+	isl_space_free(space1);
+	isl_space_free(space2);
 	return NULL;
 }
 

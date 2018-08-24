@@ -17,6 +17,7 @@
 #include "polly/ScopInfo.h"
 #include "polly/ScopPass.h"
 #include "polly/Support/GICHelper.h"
+#include "polly/Support/ISLTools.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
@@ -128,49 +129,6 @@ static bool isDimBoundedByConstant(isl::set Set, unsigned dim) {
 }
 #endif
 
-/// If @p PwAff maps to a constant, return said constant. If @p Max/@p Min, it
-/// can also be a piecewise constant and it would return the minimum/maximum
-/// value. Otherwise, return NaN.
-static isl::val getConstant(isl::pw_aff PwAff, bool Max, bool Min) {
-  assert(!Max || !Min);
-  isl::val Result;
-  PwAff.foreach_piece([=, &Result](isl::set Set, isl::aff Aff) -> isl::stat {
-    if (Result && Result.is_nan())
-      return isl::stat::ok;
-
-    // TODO: If Min/Max, we can also determine a minimum/maximum value if
-    // Set is constant-bounded.
-    if (!Aff.is_cst()) {
-      Result = isl::val::nan(Aff.get_ctx());
-      return isl::stat::error;
-    }
-
-    auto ThisVal = Aff.get_constant_val();
-    if (!Result) {
-      Result = ThisVal;
-      return isl::stat::ok;
-    }
-
-    if (Result.eq(ThisVal))
-      return isl::stat::ok;
-
-    if (Max && ThisVal.gt(Result)) {
-      Result = ThisVal;
-      return isl::stat::ok;
-    }
-
-    if (Min && ThisVal.lt(Result)) {
-      Result = ThisVal;
-      return isl::stat::ok;
-    }
-
-    // Not compatible
-    Result = isl::val::nan(Aff.get_ctx());
-    return isl::stat::error;
-  });
-  return Result;
-}
-
 char MaximalStaticExpander::ID = 0;
 
 isl::union_map MaximalStaticExpander::filterDependences(
@@ -182,11 +140,10 @@ isl::union_map MaximalStaticExpander::filterDependences(
 
   isl::union_map MapDependences = isl::union_map::empty(S.getParamSpace());
 
-  Dependences.foreach_map([&MapDependences, &AccessDomainId,
-                           &SAI](isl::map Map) -> isl::stat {
+  for (isl::map Map : Dependences.get_map_list()) {
     // Filter out Statement to Statement dependences.
     if (!Map.can_curry())
-      return isl::stat::ok;
+      continue;
 
     // Intersect with the relevant SAI.
     auto TmpMapDomainId =
@@ -196,20 +153,18 @@ isl::union_map MaximalStaticExpander::filterDependences(
         static_cast<ScopArrayInfo *>(TmpMapDomainId.get_user());
 
     if (SAI != UserSAI)
-      return isl::stat::ok;
+      continue;
 
     // Get the correct S1[] -> S2[] dependence.
     auto NewMap = Map.factor_domain();
     auto NewMapDomainId = NewMap.domain().get_tuple_id();
 
-    if (AccessDomainId.keep() != NewMapDomainId.keep())
-      return isl::stat::ok;
+    if (AccessDomainId.get() != NewMapDomainId.get())
+      continue;
 
     // Add the corresponding map to MapDependences.
     MapDependences = MapDependences.add_map(NewMap);
-
-    return isl::stat::ok;
-  });
+  }
 
   return MapDependences;
 }
@@ -235,10 +190,8 @@ bool MaximalStaticExpander::isExpandable(
 
     for (auto Write : Writes) {
       auto MapDeps = filterDependences(S, Dependences, Write);
-      MapDeps.foreach_map([&WriteDomain](isl::map Map) -> isl::stat {
+      for (isl::map Map : MapDeps.get_map_list())
         WriteDomain = WriteDomain.add_set(Map.range());
-        return isl::stat::ok;
-      });
     }
 
     // For now, read from original scalar is not possible.
@@ -281,10 +234,9 @@ bool MaximalStaticExpander::isExpandable(
           return false;
         }
 
-        StmtReads = give(isl_union_map_union(StmtReads.take(), AccRel.take()));
+        StmtReads = StmtReads.unite(AccRel);
       } else {
-        StmtWrites =
-            give(isl_union_map_union(StmtWrites.take(), AccRel.take()));
+        StmtWrites = StmtWrites.unite(AccRel);
       }
 
       // For now, we are not able to expand MayWrite.
@@ -487,7 +439,7 @@ bool MaximalStaticExpander::runOnScop(Scop &S) {
   // Get the RAW Dependences.
   auto &DI = getAnalysis<DependenceInfo>();
   auto &D = DI.getDependences(Dependences::AL_Reference);
-  auto Dependences = isl::give(D.getDependences(Dependences::TYPE_RAW));
+  isl::union_map Dependences = D.getDependences(Dependences::TYPE_RAW);
 
   SmallVector<ScopArrayInfo *, 4> CurrentSAI(S.arrays().begin(),
                                              S.arrays().end());

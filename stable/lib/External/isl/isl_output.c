@@ -268,6 +268,9 @@ static __isl_give isl_printer *print_term(__isl_keep isl_space *space,
 	enum isl_dim_type type;
 	int print_div_def;
 
+	if (!p || !space)
+		return isl_printer_free(p);
+
 	if (pos == 0)
 		return isl_printer_print_isl_int(p, c);
 
@@ -604,7 +607,7 @@ static int print_as_modulo_pos(__isl_keep isl_printer *p,
 	unsigned n_div;
 	enum isl_dim_type type;
 
-	if (!p)
+	if (!p || !space)
 		return -1;
 	n_div = isl_mat_rows(div);
 	if (p->output_format == ISL_FORMAT_C)
@@ -2080,10 +2083,13 @@ static __isl_give isl_printer *print_name_c(__isl_take isl_printer *p,
 }
 
 static __isl_give isl_printer *print_term_c(__isl_take isl_printer *p,
-	__isl_keep isl_space *dim,
+	__isl_keep isl_space *space,
 	__isl_keep isl_basic_set *bset, isl_int c, unsigned pos)
 {
 	enum isl_dim_type type;
+
+	if (!p || !space)
+		return isl_printer_free(p);
 
 	if (pos == 0)
 		return isl_printer_print_isl_int(p, c);
@@ -2096,8 +2102,8 @@ static __isl_give isl_printer *print_term_c(__isl_take isl_printer *p,
 		p = isl_printer_print_isl_int(p, c);
 		p = isl_printer_print_str(p, "*");
 	}
-	type = pos2type(dim, &pos);
-	p = print_name_c(p, dim, bset, type, pos);
+	type = pos2type(space, &pos);
+	p = print_name_c(p, space, bset, type, pos);
 	return p;
 }
 
@@ -2586,8 +2592,11 @@ error:
 	return NULL;
 }
 
+/* Print the (potentially rational) affine expression "aff" to "p",
+ * with the variable names taken from "space".
+ */
 static __isl_give isl_printer *print_aff_body(__isl_take isl_printer *p,
-	__isl_keep isl_aff *aff)
+	__isl_keep isl_space *space, __isl_keep isl_aff *aff)
 {
 	unsigned total;
 
@@ -2596,7 +2605,7 @@ static __isl_give isl_printer *print_aff_body(__isl_take isl_printer *p,
 
 	total = isl_local_space_dim(aff->ls, isl_dim_all);
 	p = isl_printer_print_str(p, "(");
-	p = print_affine_of_len(aff->ls->dim, aff->ls->div, p,
+	p = print_affine_of_len(space, aff->ls->div, p,
 				aff->v->el + 1, 1 + total);
 	if (isl_int_is_one(aff->v->el[0]))
 		p = isl_printer_print_str(p, ")");
@@ -2620,7 +2629,7 @@ static __isl_give isl_printer *print_aff(__isl_take isl_printer *p,
 		p = isl_printer_print_str(p, " -> ");
 	}
 	p = isl_printer_print_str(p, "[");
-	p = print_aff_body(p, aff);
+	p = print_aff_body(p, aff->ls->dim, aff);
 	p = isl_printer_print_str(p, "]");
 
 	return p;
@@ -2714,6 +2723,9 @@ static __isl_give isl_printer *print_ls_term_c(__isl_take isl_printer *p,
 	__isl_keep isl_local_space *ls, isl_int c, unsigned pos)
 {
 	enum isl_dim_type type;
+
+	if (!p || !ls)
+		return isl_printer_free(p);
 
 	if (pos == 0)
 		return isl_printer_print_isl_int(p, c);
@@ -2931,10 +2943,15 @@ static __isl_give isl_printer *print_dim_ma(__isl_take isl_printer *p,
 {
 	isl_multi_aff *ma = data->user;
 
-	if (data->type == isl_dim_out)
-		p = print_aff_body(p, ma->u.p[pos]);
-	else
+	if (data->type == isl_dim_out) {
+		isl_space *space;
+
+		space = isl_multi_aff_get_domain_space(ma);
+		p = print_aff_body(p, space, ma->u.p[pos]);
+		isl_space_free(space);
+	} else {
 		p = print_name(data->space, p, data->type, pos, data->latex);
+	}
 
 	return p;
 }
@@ -3159,6 +3176,7 @@ static __isl_give isl_printer *print_dim_mpa(__isl_take isl_printer *p,
 {
 	int i;
 	int need_parens;
+	isl_space *space;
 	isl_multi_pw_aff *mpa = data->user;
 	isl_pw_aff *pa;
 
@@ -3172,16 +3190,15 @@ static __isl_give isl_printer *print_dim_mpa(__isl_take isl_printer *p,
 	need_parens = pa->n != 1 || !isl_set_plain_is_universe(pa->p[0].set);
 	if (need_parens)
 		p = isl_printer_print_str(p, "(");
+	space = isl_multi_pw_aff_get_domain_space(mpa);
 	for (i = 0; i < pa->n; ++i) {
-		isl_space *space;
 
 		if (i)
 			p = isl_printer_print_str(p, "; ");
-		p = print_aff_body(p, pa->p[i].aff);
-		space = isl_aff_get_domain_space(pa->p[i].aff);
+		p = print_aff_body(p, space, pa->p[i].aff);
 		p = print_disjuncts(pa->p[i].set, space, p, 0);
-		isl_space_free(space);
 	}
+	isl_space_free(space);
 	if (need_parens)
 		p = isl_printer_print_str(p, ")");
 

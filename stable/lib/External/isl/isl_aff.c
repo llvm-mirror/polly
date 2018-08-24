@@ -41,6 +41,11 @@
 #include <isl_list_templ.c>
 
 #undef BASE
+#define BASE pw_multi_aff
+
+#include <isl_list_templ.c>
+
+#undef BASE
 #define BASE union_pw_aff
 
 #include <isl_list_templ.c>
@@ -492,14 +497,16 @@ __isl_give isl_aff *isl_aff_reset_space_and_domain(__isl_take isl_aff *aff,
 static __isl_give isl_vec *vec_reorder(__isl_take isl_vec *vec,
 	__isl_take isl_reordering *r, int n_div)
 {
+	isl_space *space;
 	isl_vec *res;
 	int i;
 
 	if (!vec || !r)
 		goto error;
 
+	space = isl_reordering_peek_space(r);
 	res = isl_vec_alloc(vec->ctx,
-			    2 + isl_space_dim(r->dim, isl_dim_all) + n_div);
+			    2 + isl_space_dim(space, isl_dim_all) + n_div);
 	if (!res)
 		goto error;
 	isl_seq_cpy(res->el, vec->el, 2);
@@ -555,10 +562,6 @@ __isl_give isl_aff *isl_aff_align_params(__isl_take isl_aff *aff,
 	if (!equal_params) {
 		isl_reordering *exp;
 
-		model = isl_space_drop_dims(model, isl_dim_in,
-					0, isl_space_dim(model, isl_dim_in));
-		model = isl_space_drop_dims(model, isl_dim_out,
-					0, isl_space_dim(model, isl_dim_out));
 		exp = isl_parameter_alignment_reordering(aff->ls->dim, model);
 		exp = isl_reordering_extend_space(exp,
 					isl_aff_get_domain_space(aff));
@@ -1998,7 +2001,7 @@ __isl_give isl_aff *isl_aff_set_tuple_id(__isl_take isl_aff *aff,
 	aff = isl_aff_cow(aff);
 	if (!aff)
 		goto error;
-	if (type != isl_dim_out)
+	if (type != isl_dim_in)
 		isl_die(aff->v->ctx, isl_error_invalid,
 			"cannot only set id of input tuple", goto error);
 	aff->ls = isl_local_space_set_tuple_id(aff->ls, isl_dim_set, id);
@@ -2692,12 +2695,8 @@ __isl_give isl_pw_aff *isl_pw_aff_from_aff(__isl_take isl_aff *aff)
 #include <isl_pw_hash.c>
 #include <isl_pw_union_opt.c>
 
-#undef UNION
-#define UNION isl_union_pw_aff
-#undef PART
-#define PART isl_pw_aff
-#undef PARTS
-#define PARTS pw_aff
+#undef BASE
+#define BASE pw_aff
 
 #include <isl_union_single.c>
 #include <isl_union_neg.c>
@@ -2716,10 +2715,9 @@ static __isl_give isl_set *align_params_pw_pw_set_and(
 		goto error;
 	if (equal_params)
 		return fn(pwaff1, pwaff2);
-	if (!isl_space_has_named_params(pwaff1->dim) ||
-	    !isl_space_has_named_params(pwaff2->dim))
-		isl_die(isl_pw_aff_get_ctx(pwaff1), isl_error_invalid,
-			"unaligned unnamed parameters", goto error);
+	if (isl_pw_aff_check_named_params(pwaff1) < 0 ||
+	    isl_pw_aff_check_named_params(pwaff2) < 0)
+		goto error;
 	pwaff1 = isl_pw_aff_align_params(pwaff1, isl_pw_aff_get_space(pwaff2));
 	pwaff2 = isl_pw_aff_align_params(pwaff2, isl_pw_aff_get_space(pwaff1));
 	return fn(pwaff1, pwaff2);
@@ -2746,10 +2744,9 @@ static __isl_give isl_map *align_params_pw_pw_map_and(
 		goto error;
 	if (equal_params)
 		return fn(pa1, pa2);
-	if (!isl_space_has_named_params(pa1->dim) ||
-	    !isl_space_has_named_params(pa2->dim))
-		isl_die(isl_pw_aff_get_ctx(pa1), isl_error_invalid,
-			"unaligned unnamed parameters", goto error);
+	if (isl_pw_aff_check_named_params(pa1) < 0 ||
+	    isl_pw_aff_check_named_params(pa2) < 0)
+		goto error;
 	pa1 = isl_pw_aff_align_params(pa1, isl_pw_aff_get_space(pa2));
 	pa2 = isl_pw_aff_align_params(pa2, isl_pw_aff_get_space(pa1));
 	return fn(pa1, pa2);
@@ -2804,70 +2801,6 @@ __isl_give isl_pw_aff *isl_pw_aff_union_opt(__isl_take isl_pw_aff *pwaff1,
 		return isl_pw_aff_union_max(pwaff1, pwaff2);
 	else
 		return isl_pw_aff_union_min(pwaff1, pwaff2);
-}
-
-/* Construct a map with as domain the domain of pwaff and
- * one-dimensional range corresponding to the affine expressions.
- */
-static __isl_give isl_map *map_from_pw_aff(__isl_take isl_pw_aff *pwaff)
-{
-	int i;
-	isl_space *dim;
-	isl_map *map;
-
-	if (!pwaff)
-		return NULL;
-
-	dim = isl_pw_aff_get_space(pwaff);
-	map = isl_map_empty(dim);
-
-	for (i = 0; i < pwaff->n; ++i) {
-		isl_basic_map *bmap;
-		isl_map *map_i;
-
-		bmap = isl_basic_map_from_aff(isl_aff_copy(pwaff->p[i].aff));
-		map_i = isl_map_from_basic_map(bmap);
-		map_i = isl_map_intersect_domain(map_i,
-						isl_set_copy(pwaff->p[i].set));
-		map = isl_map_union_disjoint(map, map_i);
-	}
-
-	isl_pw_aff_free(pwaff);
-
-	return map;
-}
-
-/* Construct a map with as domain the domain of pwaff and
- * one-dimensional range corresponding to the affine expressions.
- */
-__isl_give isl_map *isl_map_from_pw_aff(__isl_take isl_pw_aff *pwaff)
-{
-	if (!pwaff)
-		return NULL;
-	if (isl_space_is_set(pwaff->dim))
-		isl_die(isl_pw_aff_get_ctx(pwaff), isl_error_invalid,
-			"space of input is not a map", goto error);
-	return map_from_pw_aff(pwaff);
-error:
-	isl_pw_aff_free(pwaff);
-	return NULL;
-}
-
-/* Construct a one-dimensional set with as parameter domain
- * the domain of pwaff and the single set dimension
- * corresponding to the affine expressions.
- */
-__isl_give isl_set *isl_set_from_pw_aff(__isl_take isl_pw_aff *pwaff)
-{
-	if (!pwaff)
-		return NULL;
-	if (!isl_space_is_set(pwaff->dim))
-		isl_die(isl_pw_aff_get_ctx(pwaff), isl_error_invalid,
-			"space of input is not a set", goto error);
-	return map_from_pw_aff(pwaff);
-error:
-	isl_pw_aff_free(pwaff);
-	return NULL;
 }
 
 /* Return a set containing those elements in the domain
@@ -4241,8 +4174,8 @@ static __isl_give isl_set *isl_multi_aff_order_set(
 	isl_map *map1, *map2;
 	isl_map *map, *ge;
 
-	map1 = isl_map_from_multi_aff(ma1);
-	map2 = isl_map_from_multi_aff(ma2);
+	map1 = isl_map_from_multi_aff_internal(ma1);
+	map2 = isl_map_from_multi_aff_internal(ma2);
 	map = isl_map_range_product(map1, map2);
 	space = isl_space_range(isl_map_get_space(map));
 	space = isl_space_domain(isl_space_unwrap(space));
@@ -4287,7 +4220,6 @@ __isl_give isl_set *isl_multi_aff_lex_gt_set(__isl_take isl_multi_aff *ma1,
 
 #define NO_SUB
 #define NO_OPT
-#define NO_INVOLVES_DIMS
 #define NO_INSERT_DIMS
 #define NO_LIFT
 #define NO_MORPH
@@ -4297,12 +4229,8 @@ __isl_give isl_set *isl_multi_aff_lex_gt_set(__isl_take isl_multi_aff *ma1,
 
 #undef NO_SUB
 
-#undef UNION
-#define UNION isl_union_pw_multi_aff
-#undef PART
-#define PART isl_pw_multi_aff
-#undef PARTS
-#define PARTS pw_multi_aff
+#undef BASE
+#define BASE pw_multi_aff
 
 #include <isl_union_multi.c>
 #include <isl_union_neg.c>
@@ -4454,59 +4382,6 @@ __isl_give isl_pw_multi_aff *isl_pw_multi_aff_product(
 {
 	return isl_pw_multi_aff_align_params_pw_pw_and(pma1, pma2,
 						&pw_multi_aff_product);
-}
-
-/* Construct a map mapping the domain of the piecewise multi-affine expression
- * to its range, with each dimension in the range equated to the
- * corresponding affine expression on its cell.
- *
- * If the domain of "pma" is rational, then so is the constructed "map".
- */
-__isl_give isl_map *isl_map_from_pw_multi_aff(__isl_take isl_pw_multi_aff *pma)
-{
-	int i;
-	isl_map *map;
-
-	if (!pma)
-		return NULL;
-
-	map = isl_map_empty(isl_pw_multi_aff_get_space(pma));
-
-	for (i = 0; i < pma->n; ++i) {
-		isl_bool rational;
-		isl_multi_aff *maff;
-		isl_basic_map *bmap;
-		isl_map *map_i;
-
-		rational = isl_set_is_rational(pma->p[i].set);
-		if (rational < 0)
-			map = isl_map_free(map);
-		maff = isl_multi_aff_copy(pma->p[i].maff);
-		bmap = isl_basic_map_from_multi_aff2(maff, rational);
-		map_i = isl_map_from_basic_map(bmap);
-		map_i = isl_map_intersect_domain(map_i,
-						isl_set_copy(pma->p[i].set));
-		map = isl_map_union_disjoint(map, map_i);
-	}
-
-	isl_pw_multi_aff_free(pma);
-	return map;
-}
-
-__isl_give isl_set *isl_set_from_pw_multi_aff(__isl_take isl_pw_multi_aff *pma)
-{
-	if (!pma)
-		return NULL;
-
-	if (!isl_space_is_set(pma->dim))
-		isl_die(isl_pw_multi_aff_get_ctx(pma), isl_error_invalid,
-			"isl_pw_multi_aff cannot be converted into an isl_set",
-			goto error);
-
-	return isl_map_from_pw_multi_aff(pma);
-error:
-	isl_pw_multi_aff_free(pma);
-	return NULL;
 }
 
 /* Subtract the initial "n" elements in "ma" with coefficients in "c" and
@@ -4886,7 +4761,7 @@ static __isl_give isl_pw_multi_aff *pw_multi_aff_from_map_div(
 						isl_multi_aff_from_aff(aff));
 	}
 
-	insert = isl_map_from_multi_aff(isl_multi_aff_copy(ma));
+	insert = isl_map_from_multi_aff_internal(isl_multi_aff_copy(ma));
 	map = isl_map_apply_domain(map, insert);
 	map = isl_map_equate(map, isl_dim_in, n_in, isl_dim_out, d);
 	pma = isl_pw_multi_aff_from_map(map);
@@ -5995,48 +5870,6 @@ error:
 	return NULL;
 }
 
-/* Convert "pma" to an isl_map and add it to *umap.
- */
-static isl_stat map_from_pw_multi_aff(__isl_take isl_pw_multi_aff *pma,
-	void *user)
-{
-	isl_union_map **umap = user;
-	isl_map *map;
-
-	map = isl_map_from_pw_multi_aff(pma);
-	*umap = isl_union_map_add_map(*umap, map);
-
-	return isl_stat_ok;
-}
-
-/* Construct a union map mapping the domain of the union
- * piecewise multi-affine expression to its range, with each dimension
- * in the range equated to the corresponding affine expression on its cell.
- */
-__isl_give isl_union_map *isl_union_map_from_union_pw_multi_aff(
-	__isl_take isl_union_pw_multi_aff *upma)
-{
-	isl_space *space;
-	isl_union_map *umap;
-
-	if (!upma)
-		return NULL;
-
-	space = isl_union_pw_multi_aff_get_space(upma);
-	umap = isl_union_map_empty(space);
-
-	if (isl_union_pw_multi_aff_foreach_pw_multi_aff(upma,
-					&map_from_pw_multi_aff, &umap) < 0)
-		goto error;
-
-	isl_union_pw_multi_aff_free(upma);
-	return umap;
-error:
-	isl_union_pw_multi_aff_free(upma);
-	isl_union_map_free(umap);
-	return NULL;
-}
-
 /* Local data for bin_entry and the callback "fn".
  */
 struct isl_union_pw_multi_aff_bin_data {
@@ -6257,10 +6090,9 @@ __isl_give isl_pw_multi_aff *isl_pw_multi_aff_set_pw_aff(
 		goto error;
 	if (equal_params)
 		return pw_multi_aff_set_pw_aff(pma, pos, pa);
-	if (!isl_space_has_named_params(pma->dim) ||
-	    !isl_space_has_named_params(pa->dim))
-		isl_die(isl_pw_multi_aff_get_ctx(pma), isl_error_invalid,
-			"unaligned unnamed parameters", goto error);
+	if (isl_pw_multi_aff_check_named_params(pma) < 0 ||
+	    isl_pw_aff_check_named_params(pa) < 0)
+		goto error;
 	pma = isl_pw_multi_aff_align_params(pma, isl_pw_aff_get_space(pa));
 	pa = isl_pw_aff_align_params(pa, isl_pw_multi_aff_get_space(pma));
 	return pw_multi_aff_set_pw_aff(pma, pos, pa);
@@ -6479,85 +6311,6 @@ __isl_give isl_pw_multi_aff *isl_pw_multi_aff_from_pw_aff(
 	return pma;
 }
 
-/* Construct a set or map mapping the shared (parameter) domain
- * of the piecewise affine expressions to the range of "mpa"
- * with each dimension in the range equated to the
- * corresponding piecewise affine expression.
- */
-static __isl_give isl_map *map_from_multi_pw_aff(
-	__isl_take isl_multi_pw_aff *mpa)
-{
-	int i;
-	isl_space *space;
-	isl_map *map;
-
-	if (!mpa)
-		return NULL;
-
-	if (isl_space_dim(mpa->space, isl_dim_out) != mpa->n)
-		isl_die(isl_multi_pw_aff_get_ctx(mpa), isl_error_internal,
-			"invalid space", goto error);
-
-	space = isl_multi_pw_aff_get_domain_space(mpa);
-	map = isl_map_universe(isl_space_from_domain(space));
-
-	for (i = 0; i < mpa->n; ++i) {
-		isl_pw_aff *pa;
-		isl_map *map_i;
-
-		pa = isl_pw_aff_copy(mpa->u.p[i]);
-		map_i = map_from_pw_aff(pa);
-
-		map = isl_map_flat_range_product(map, map_i);
-	}
-
-	map = isl_map_reset_space(map, isl_multi_pw_aff_get_space(mpa));
-
-	isl_multi_pw_aff_free(mpa);
-	return map;
-error:
-	isl_multi_pw_aff_free(mpa);
-	return NULL;
-}
-
-/* Construct a map mapping the shared domain
- * of the piecewise affine expressions to the range of "mpa"
- * with each dimension in the range equated to the
- * corresponding piecewise affine expression.
- */
-__isl_give isl_map *isl_map_from_multi_pw_aff(__isl_take isl_multi_pw_aff *mpa)
-{
-	if (!mpa)
-		return NULL;
-	if (isl_space_is_set(mpa->space))
-		isl_die(isl_multi_pw_aff_get_ctx(mpa), isl_error_internal,
-			"space of input is not a map", goto error);
-
-	return map_from_multi_pw_aff(mpa);
-error:
-	isl_multi_pw_aff_free(mpa);
-	return NULL;
-}
-
-/* Construct a set mapping the shared parameter domain
- * of the piecewise affine expressions to the space of "mpa"
- * with each dimension in the range equated to the
- * corresponding piecewise affine expression.
- */
-__isl_give isl_set *isl_set_from_multi_pw_aff(__isl_take isl_multi_pw_aff *mpa)
-{
-	if (!mpa)
-		return NULL;
-	if (!isl_space_is_set(mpa->space))
-		isl_die(isl_multi_pw_aff_get_ctx(mpa), isl_error_internal,
-			"space of input is not a set", goto error);
-
-	return map_from_multi_pw_aff(mpa);
-error:
-	isl_multi_pw_aff_free(mpa);
-	return NULL;
-}
-
 /* Construct and return a piecewise multi affine expression
  * that is equal to the given multi piecewise affine expression
  * on the shared domain of the piecewise affine expressions,
@@ -6709,8 +6462,8 @@ isl_bool isl_pw_aff_is_equal(__isl_keep isl_pw_aff *pa1,
 	if (has_nan)
 		return isl_bool_false;
 
-	map1 = map_from_pw_aff(isl_pw_aff_copy(pa1));
-	map2 = map_from_pw_aff(isl_pw_aff_copy(pa2));
+	map1 = isl_map_from_pw_aff_internal(isl_pw_aff_copy(pa1));
+	map2 = isl_map_from_pw_aff_internal(isl_pw_aff_copy(pa2));
 	equal = isl_map_is_equal(map1, map2);
 	isl_map_free(map1);
 	isl_map_free(map2);
@@ -7620,7 +7373,7 @@ static isl_stat isl_union_pw_aff_check_match_domain_space(
 		return isl_stat_error;
 	if (!match)
 		isl_die(isl_space_get_ctx(space), isl_error_invalid,
-			"expecting set space", return -1);
+			"expecting set space", return isl_stat_error);
 
 	upa_space = isl_union_pw_aff_get_space(upa);
 	match = isl_space_has_equal_params(space, upa_space);
@@ -8062,43 +7815,6 @@ __isl_give isl_union_set *isl_union_pw_aff_zero_union_set(
 	return zero;
 }
 
-/* Convert "pa" to an isl_map and add it to *umap.
- */
-static isl_stat map_from_pw_aff_entry(__isl_take isl_pw_aff *pa, void *user)
-{
-	isl_union_map **umap = user;
-	isl_map *map;
-
-	map = isl_map_from_pw_aff(pa);
-	*umap = isl_union_map_add_map(*umap, map);
-
-	return *umap ? isl_stat_ok : isl_stat_error;
-}
-
-/* Construct a union map mapping the domain of the union
- * piecewise affine expression to its range, with the single output dimension
- * equated to the corresponding affine expressions on their cells.
- */
-__isl_give isl_union_map *isl_union_map_from_union_pw_aff(
-	__isl_take isl_union_pw_aff *upa)
-{
-	isl_space *space;
-	isl_union_map *umap;
-
-	if (!upa)
-		return NULL;
-
-	space = isl_union_pw_aff_get_space(upa);
-	umap = isl_union_map_empty(space);
-
-	if (isl_union_pw_aff_foreach_pw_aff(upa, &map_from_pw_aff_entry,
-						&umap) < 0)
-		umap = isl_union_map_free(umap);
-
-	isl_union_pw_aff_free(upa);
-	return umap;
-}
-
 /* Internal data structure for isl_union_pw_aff_pullback_union_pw_multi_aff.
  * upma is the function that is plugged in.
  * pa is the current part of the function in which upma is plugged in.
@@ -8198,7 +7914,6 @@ error:
 #define NO_SPLICE
 #define NO_ZERO
 #define NO_IDENTITY
-#define NO_GIST
 
 #include <isl_multi_explicit_domain.c>
 #include <isl_multi_union_pw_aff_explicit_domain.c>
@@ -8503,6 +8218,10 @@ __isl_give isl_multi_union_pw_aff *isl_multi_union_pw_aff_from_union_map(
 /* Return a multiple union piecewise affine expression
  * that is equal to "mv" on "domain", assuming "domain" and "mv"
  * have been aligned.
+ *
+ * If the resulting multi union piecewise affine expression has
+ * an explicit domain, then assign it the input domain.
+ * In other cases, the domain is stored in the individual elements.
  */
 static __isl_give isl_multi_union_pw_aff *
 isl_multi_union_pw_aff_multi_val_on_domain_aligned(
@@ -8527,6 +8246,9 @@ isl_multi_union_pw_aff_multi_val_on_domain_aligned(
 							v);
 		mupa = isl_multi_union_pw_aff_set_union_pw_aff(mupa, i, upa);
 	}
+	if (isl_multi_union_pw_aff_has_explicit_domain(mupa))
+		mupa = isl_multi_union_pw_aff_intersect_domain(mupa,
+						    isl_union_set_copy(domain));
 
 	isl_union_set_free(domain);
 	isl_multi_val_free(mv);

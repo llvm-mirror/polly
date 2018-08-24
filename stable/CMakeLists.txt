@@ -97,14 +97,17 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${POLLY_SOURCE_DIR}/cmake")
 SET(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 
 option(POLLY_ENABLE_GPGPU_CODEGEN "Enable GPGPU code generation feature" OFF)
+set(GPU_CODEGEN FALSE)
 if (POLLY_ENABLE_GPGPU_CODEGEN)
   # Do not require CUDA/OpenCL, as GPU code generation test cases can be run
   # without a CUDA/OpenCL library.
-  FIND_PACKAGE(CUDA)
-  FIND_PACKAGE(OpenCL)
-  set(GPU_CODEGEN TRUE)
-else(POLLY_ENABLE_GPGPU_CODEGEN)
-  set(GPU_CODEGEN FALSE)
+  if ("NVPTX" IN_LIST LLVM_TARGETS_TO_BUILD)
+    FIND_PACKAGE(CUDA)
+    FIND_PACKAGE(OpenCL)
+    set(GPU_CODEGEN TRUE)
+  else()
+    message(WARNING "The LLVM NVPTX target is required for GPU code generation")
+  endif()
 endif(POLLY_ENABLE_GPGPU_CODEGEN)
 
 
@@ -131,25 +134,10 @@ else()
   set(ISL_TARGET PollyISL)
 endif()
 
-option(POLLY_BUNDLED_JSONCPP "Use the bundled version of jsoncpp included in Polly" ON)
-if (POLLY_BUNDLED_JSONCPP)
-  set(JSONCPP_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/lib/External/JSON/include")
-  set(JSONCPP_LIBRARIES)
-  set(POLLY_JSON_FILES
-    External/JSON/json_reader.cpp
-    External/JSON/json_value.cpp
-    External/JSON/json_writer.cpp
-  )
-else ()
-  find_package(Jsoncpp REQUIRED)
-  set(POLLY_JSON_FILES)
-endif ()
-
 include_directories(
   BEFORE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
   ${ISL_INCLUDE_DIRS}
-  ${JSONCPP_INCLUDE_DIRS}
   ${CMAKE_CURRENT_SOURCE_DIR}/lib/External/pet/include
   ${CMAKE_CURRENT_SOURCE_DIR}/lib/External
   ${CMAKE_CURRENT_BINARY_DIR}/include

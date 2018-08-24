@@ -25,6 +25,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/MapVector.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
@@ -1716,6 +1717,9 @@ private:
   /// The underlying Region.
   Region &R;
 
+  /// The name of the SCoP (identical to the regions name)
+  Optional<std::string> name;
+
   /// The ID to be assigned to the next Scop in a function
   static int NextScopID;
 
@@ -1883,6 +1887,10 @@ private:
   /// are also several other nodes. A full description of the different nodes
   /// in a schedule tree is given in the isl manual.
   isl::schedule Schedule = nullptr;
+
+  /// Whether the schedule has been modified after derived from the CFG by
+  /// ScopBuilder.
+  bool ScheduleModified = false;
 
   /// The set of minimal/maximal accesses for each alias group.
   ///
@@ -2287,7 +2295,7 @@ private:
   void removeFromStmtMap(ScopStmt &Stmt);
 
   /// Removes all statements where the entry block of the statement does not
-  /// have a corresponding domain in the domain map.
+  /// have a corresponding domain in the domain map (or it is empty).
   void removeStmtNotInDomainMap();
 
   /// Mark arrays that have memory accesses with FortranArrayDescriptor.
@@ -2452,7 +2460,11 @@ public:
   /// could be executed.
   bool isEmpty() const { return Stmts.empty(); }
 
-  const StringRef getName() const { return R.getNameStr(); }
+  StringRef getName() {
+    if (!name)
+      name = R.getNameStr();
+    return *name;
+  }
 
   using array_iterator = ArrayInfoSetTy::iterator;
   using const_array_iterator = ArrayInfoSetTy::const_iterator;
@@ -2988,6 +3000,10 @@ public:
   ///
   /// NewSchedule The new schedule (given as schedule tree).
   void setScheduleTree(isl::schedule NewSchedule);
+
+  /// Whether the schedule is the original schedule as derived from the CFG by
+  /// ScopBuilder.
+  bool isOriginalSchedule() const { return !ScheduleModified; }
 
   /// Intersects the domains of all statements in the SCoP.
   ///

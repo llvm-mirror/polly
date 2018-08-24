@@ -410,8 +410,8 @@ inline bool ScopDetection::invalid(DetectionContext &Context, bool Assert,
     if (PollyTrackFailures)
       Log.report(RejectReason);
 
-    DEBUG(dbgs() << RejectReason->getMessage());
-    DEBUG(dbgs() << "\n");
+    LLVM_DEBUG(dbgs() << RejectReason->getMessage());
+    LLVM_DEBUG(dbgs() << "\n");
   } else {
     assert(!Assert && "Verification of detected scop failed");
   }
@@ -483,8 +483,7 @@ bool ScopDetection::onlyValidRequiredInvariantLoads(
     // very function (and its children).
     if (Context.RequiredILS.count(Load))
       continue;
-
-    if (!isHoistableLoad(Load, CurRegion, LI, SE, DT))
+    if (!isHoistableLoad(Load, CurRegion, LI, SE, DT, Context.RequiredILS))
       return false;
 
     for (auto NonAffineRegion : Context.NonAffineSubRegionSet) {
@@ -704,8 +703,8 @@ bool ScopDetection::isValidCallInst(CallInst &CI,
     return false;
 
   if (isDebugCall(&CI)) {
-    DEBUG(dbgs() << "Allow call to debug function: "
-                 << CalledFunction->getName() << '\n');
+    LLVM_DEBUG(dbgs() << "Allow call to debug function: "
+                      << CalledFunction->getName() << '\n');
     return true;
   }
 
@@ -938,7 +937,7 @@ bool ScopDetection::hasValidArraySizes(DetectionContext &Context,
       auto *V = dyn_cast<Value>(Unknown->getValue());
       if (auto *Load = dyn_cast<LoadInst>(V)) {
         if (Context.CurRegion.contains(Load) &&
-            isHoistableLoad(Load, CurRegion, LI, SE, DT))
+            isHoistableLoad(Load, CurRegion, LI, SE, DT, Context.RequiredILS))
           Context.RequiredILS.insert(Load);
         continue;
       }
@@ -1137,8 +1136,8 @@ bool ScopDetection::isValidAccess(Instruction *Inst, const SCEV *AF,
   // any other pointer. This cannot be handled at the moment.
   AAMDNodes AATags;
   Inst->getAAMetadata(AATags);
-  AliasSet &AS = Context.AST.getAliasSetForPointer(
-      BP->getValue(), MemoryLocation::UnknownSize, AATags);
+  AliasSet &AS = Context.AST.getAliasSetFor(
+      MemoryLocation(BP->getValue(), MemoryLocation::UnknownSize, AATags));
 
   if (!AS.isMustAlias()) {
     if (PollyUseRuntimeAliasChecks) {
@@ -1148,18 +1147,38 @@ bool ScopDetection::isValidAccess(Instruction *Inst, const SCEV *AF,
       // inside the scop. Hence, we can only create a run-time check if we are
       // sure the base pointer is not an instruction defined inside the scop.
       // However, we can ignore loads that will be hoisted.
-      for (const auto &Ptr : AS) {
-        Instruction *Inst = dyn_cast<Instruction>(Ptr.getValue());
-        if (Inst && Context.CurRegion.contains(Inst)) {
-          auto *Load = dyn_cast<LoadInst>(Inst);
-          if (Load && isHoistableLoad(Load, Context.CurRegion, LI, SE, DT)) {
-            Context.RequiredILS.insert(Load);
-            continue;
-          }
 
-          CanBuildRunTimeCheck = false;
-          break;
+      InvariantLoadsSetTy VariantLS, InvariantLS;
+      // In order to detect loads which are dependent on other invariant loads
+      // as invariant, we use fixed-point iteration method here i.e we iterate
+      // over the alias set for arbitrary number of times until it is safe to
+      // assume that all the invariant loads have been detected
+      while (1) {
+        const unsigned int VariantSize = VariantLS.size(),
+                           InvariantSize = InvariantLS.size();
+
+        for (const auto &Ptr : AS) {
+          Instruction *Inst = dyn_cast<Instruction>(Ptr.getValue());
+          if (Inst && Context.CurRegion.contains(Inst)) {
+            auto *Load = dyn_cast<LoadInst>(Inst);
+            if (Load && InvariantLS.count(Load))
+              continue;
+            if (Load && isHoistableLoad(Load, Context.CurRegion, LI, SE, DT,
+                                        InvariantLS)) {
+              if (VariantLS.count(Load))
+                VariantLS.remove(Load);
+              Context.RequiredILS.insert(Load);
+              InvariantLS.insert(Load);
+            } else {
+              CanBuildRunTimeCheck = false;
+              VariantLS.insert(Load);
+            }
+          }
         }
+
+        if (InvariantSize == InvariantLS.size() &&
+            VariantSize == VariantLS.size())
+          break;
       }
 
       if (CanBuildRunTimeCheck)
@@ -1297,6 +1316,18 @@ bool ScopDetection::isValidLoop(Loop *L, DetectionContext &Context) const {
   if (!hasExitingBlocks(L))
     return invalid<ReportLoopHasNoExit>(Context, /*Assert=*/true, L);
 
+  // The algorithm for domain construction assumes that loops has only a single
+  // exit block (and hence corresponds to a subregion). Note that we cannot use
+  // L->getExitBlock() because it does not check whether all exiting edges point
+  // to the same BB.
+  SmallVector<BasicBlock *, 4> ExitBlocks;
+  L->getExitBlocks(ExitBlocks);
+  BasicBlock *TheExitBlock = ExitBlocks[0];
+  for (BasicBlock *ExitBB : ExitBlocks) {
+    if (TheExitBlock != ExitBB)
+      return invalid<ReportLoopHasMultipleExits>(Context, /*Assert=*/true, L);
+  }
+
   if (canUseISLTripCount(L, Context))
     return true;
 
@@ -1371,14 +1402,14 @@ Region *ScopDetection::expandRegion(Region &R) {
   std::unique_ptr<Region> LastValidRegion;
   auto ExpandedRegion = std::unique_ptr<Region>(R.getExpandedRegion());
 
-  DEBUG(dbgs() << "\tExpanding " << R.getNameStr() << "\n");
+  LLVM_DEBUG(dbgs() << "\tExpanding " << R.getNameStr() << "\n");
 
   while (ExpandedRegion) {
     const auto &It = DetectionContextMap.insert(std::make_pair(
         getBBPairForRegion(ExpandedRegion.get()),
         DetectionContext(*ExpandedRegion, AA, false /*verifying*/)));
     DetectionContext &Context = It.first->second;
-    DEBUG(dbgs() << "\t\tTrying " << ExpandedRegion->getNameStr() << "\n");
+    LLVM_DEBUG(dbgs() << "\t\tTrying " << ExpandedRegion->getNameStr() << "\n");
     // Only expand when we did not collect errors.
 
     if (!Context.Log.hasErrors()) {
@@ -1412,7 +1443,7 @@ Region *ScopDetection::expandRegion(Region &R) {
     }
   }
 
-  DEBUG({
+  LLVM_DEBUG({
     if (LastValidRegion)
       dbgs() << "\tto " << LastValidRegion->getNameStr() << "\n";
     else
@@ -1618,23 +1649,23 @@ bool ScopDetection::isProfitableRegion(DetectionContext &Context) const {
 bool ScopDetection::isValidRegion(DetectionContext &Context) const {
   Region &CurRegion = Context.CurRegion;
 
-  DEBUG(dbgs() << "Checking region: " << CurRegion.getNameStr() << "\n\t");
+  LLVM_DEBUG(dbgs() << "Checking region: " << CurRegion.getNameStr() << "\n\t");
 
   if (!PollyAllowFullFunction && CurRegion.isTopLevelRegion()) {
-    DEBUG(dbgs() << "Top level region is invalid\n");
+    LLVM_DEBUG(dbgs() << "Top level region is invalid\n");
     return false;
   }
 
   DebugLoc DbgLoc;
   if (CurRegion.getExit() &&
       isa<UnreachableInst>(CurRegion.getExit()->getTerminator())) {
-    DEBUG(dbgs() << "Unreachable in exit\n");
+    LLVM_DEBUG(dbgs() << "Unreachable in exit\n");
     return invalid<ReportUnreachableInExit>(Context, /*Assert=*/true,
                                             CurRegion.getExit(), DbgLoc);
   }
 
   if (!CurRegion.getEntry()->getName().count(OnlyRegion)) {
-    DEBUG({
+    LLVM_DEBUG({
       dbgs() << "Region entry does not match -polly-region-only";
       dbgs() << "\n";
     });
@@ -1655,7 +1686,7 @@ bool ScopDetection::isValidRegion(DetectionContext &Context) const {
     return invalid<ReportIrreducibleRegion>(Context, /*Assert=*/true,
                                             &CurRegion, DbgLoc);
 
-  DEBUG(dbgs() << "OK\n");
+  LLVM_DEBUG(dbgs() << "OK\n");
   return true;
 }
 
