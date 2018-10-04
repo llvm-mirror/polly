@@ -717,7 +717,9 @@ bool ScopDetection::isValidCallInst(CallInst &CI,
       // Implicitly disable delinearization since we have an unknown
       // accesses with an unknown access function.
       Context.HasUnknownAccess = true;
-      Context.AST.add(&CI);
+      // Explicitly use addUnknown so we don't put a loop-variant
+      // pointer into the alias set.
+      Context.AST.addUnknown(&CI);
       return true;
     case FMRB_OnlyReadsArgumentPointees:
     case FMRB_OnlyAccessesArgumentPointees:
@@ -740,7 +742,9 @@ bool ScopDetection::isValidCallInst(CallInst &CI,
         Context.HasUnknownAccess = true;
       }
 
-      Context.AST.add(&CI);
+      // Explicitly use addUnknown so we don't put a loop-variant
+      // pointer into the alias set.
+      Context.AST.addUnknown(&CI);
       return true;
     case FMRB_DoesNotReadMemory:
     case FMRB_OnlyAccessesInaccessibleMem:
@@ -1214,7 +1218,8 @@ bool ScopDetection::isValidInstruction(Instruction &Inst,
       auto *PHI = dyn_cast<PHINode>(OpInst);
       if (PHI) {
         for (User *U : PHI->users()) {
-          if (!isa<TerminatorInst>(U))
+          auto *UI = dyn_cast<Instruction>(U);
+          if (!UI || !UI->isTerminator())
             return false;
         }
       } else {
