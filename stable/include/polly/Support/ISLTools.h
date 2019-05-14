@@ -1,9 +1,8 @@
 //===------ ISLTools.h ------------------------------------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -15,8 +14,8 @@
 #ifndef POLLY_ISLTOOLS_H
 #define POLLY_ISLTOOLS_H
 
-#include "polly/Support/GICHelper.h"
-#include "llvm/ADT/iterator_range.h"
+#include "llvm/ADT/iterator.h"
+#include "isl/isl-noexceptions.h"
 
 namespace isl {
 inline namespace noexceptions {

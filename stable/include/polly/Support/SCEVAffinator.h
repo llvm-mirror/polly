@@ -1,9 +1,8 @@
 //===------ polly/SCEVAffinator.h - Create isl expressions from SCEVs -----===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -14,21 +13,11 @@
 #ifndef POLLY_SCEV_AFFINATOR_H
 #define POLLY_SCEV_AFFINATOR_H
 
-#include "llvm/ADT/DenseMap.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
-
 #include "isl/isl-noexceptions.h"
-
-namespace llvm {
-class Region;
-class BasicBlock;
-class DataLayout;
-class ScalarEvolution;
-} // namespace llvm
 
 namespace polly {
 class Scop;
-class ScopStmt;
 
 /// The result type of the SCEVAffinator.
 ///

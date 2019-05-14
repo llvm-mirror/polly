@@ -1,9 +1,8 @@
 //===- Schedule.cpp - Calculate an optimized schedule ---------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -54,23 +53,18 @@
 #include "polly/ScopInfo.h"
 #include "polly/ScopPass.h"
 #include "polly/Simplify.h"
-#include "polly/Support/GICHelper.h"
 #include "polly/Support/ISLOStream.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Function.h"
-#include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-#include "isl/constraint.h"
 #include "isl/ctx.h"
-#include "isl/map.h"
 #include "isl/options.h"
 #include "isl/printer.h"
 #include "isl/schedule.h"
 #include "isl/schedule_node.h"
-#include "isl/space.h"
 #include "isl/union_map.h"
 #include "isl/union_set.h"
 #include <algorithm>

@@ -1,9 +1,8 @@
 //===------ Support/ScopHelper.h -- Some Helper Functions for Scop. -------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -14,13 +13,10 @@
 #ifndef POLLY_SUPPORT_IRHELPER_H
 #define POLLY_SUPPORT_IRHELPER_H
 
-#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/ValueHandle.h"
-#include <tuple>
-#include <vector>
 
 namespace llvm {
 class LoopInfo;
@@ -31,7 +27,6 @@ class Region;
 class Pass;
 class DominatorTree;
 class RegionInfo;
-class GetElementPtrInst;
 } // namespace llvm
 
 namespace polly {
